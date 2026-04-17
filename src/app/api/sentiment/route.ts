@@ -51,7 +51,7 @@ export async function GET() {
   try {
     const response = await fetch(REDDIT_URL, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; ZenitBot/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; nexTickBot/1.0)",
       },
     });
 

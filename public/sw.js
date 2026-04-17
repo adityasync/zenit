@@ -1,4 +1,4 @@
-const CACHE_NAME = "zenit-v1";
+const CACHE_NAME = "nextick-v1";
 const STATIC_ASSETS = [
   "/",
   "/fo",

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const GLM_API_KEY = process.env.GLM_API_KEY;
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
 interface CopilotContext {
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       return NextResponse.json(cached.data);
     }
 
-    if (!ANTHROPIC_API_KEY) {
+    if (!GLM_API_KEY) {
       const mockResponse = generateMockResponse(query, context);
       return NextResponse.json(mockResponse);
     }
@@ -44,19 +44,20 @@ Rules:
 - Be specific about price levels and percentage moves
 - Reference relevant news or technical factors when available`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
+        "Authorization": `Bearer ${GLM_API_KEY}`
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 300,
-        system: systemPrompt,
+        model: "glm-4.7-flash",
+        max_tokens: 2000,
         messages: [
+          {
+            role: "system",
+            content: systemPrompt
+          },
           {
             role: "user",
             content: `${contextString}\n\nUser question: ${query}`,
@@ -67,13 +68,38 @@ Rules:
 
     if (!response.ok) {
       const error = await response.text();
-      console.error("Anthropic API error:", error);
+      console.error("GLM API error:", error);
       const mockResponse = generateMockResponse(query, context);
       return NextResponse.json(mockResponse);
     }
 
     const data = await response.json();
-    const responseText = data.content?.[0]?.text || "I couldn't generate a response. Please try again.";
+    console.log("GLM FULL RESPONSE:", JSON.stringify(data, null, 2));
+    
+    // Zhipu sometimes returns a 200 OK HTTP status but puts the error inside the JSON
+    if (data.error) {
+       return NextResponse.json({ 
+         response: `API Error: ${data.error.message || "Unknown API error"}`, 
+         error: true 
+       });
+    }
+
+    const message = data.choices?.[0]?.message;
+    let responseText = "";
+    
+    if (message) {
+       // We log the reasoning content to console for debugging, but omit it from the UI for a cleaner user experience
+       if (message.reasoning_content) {
+          console.log("AI Reasoning:\n", message.reasoning_content);
+       }
+       responseText = message.content || "";
+    }
+    
+    // Trim and use fallback if strictly empty
+    responseText = responseText.trim();
+    if (!responseText) {
+       responseText = "I couldn't generate a response for this context. Please try again.";
+    }
 
     const result = {
       response: responseText,
@@ -92,8 +118,9 @@ Rules:
   }
 }
 
-function buildContextString(context?: CopilotContext): string {
+function buildContextString(context?: CopilotContext | string): string {
   if (!context) return "No market data available.";
+  if (typeof context === "string") return `Current Market Data:\n${context}`;
 
   let str = "Current Market Data:\n";
 

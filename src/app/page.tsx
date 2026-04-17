@@ -1,9 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import StockHeatmap from '@/components/StockHeatmap';
+import RealCandlestickChart from '@/components/CandlestickChart';
 import { 
   Zap, 
   Layers, 
+  Bot,
   Activity, 
   Newspaper, 
   BarChart3, 
@@ -35,7 +38,7 @@ import { MobileNav, MobileTab } from "@/components/mobile-nav";
 import type { IndexData, StockQuote, MarketBreadth, GainerLoser, SectorData, SentimentData } from "@/types/market";
 import type { LucideIcon } from "lucide-react";
 
-const WATCHLIST_KEY = "zenit:watchlist";
+const WATCHLIST_KEY = "nextick:watchlist";
 
 const formatPrice = (val: number) => {
   if (typeof val !== 'number' || isNaN(val)) return "0.00";
@@ -144,6 +147,8 @@ export default function App() {
   const [searching, setSearching] = useState(false);
   
   const [activeOverlay, setActiveOverlay] = useState<string | null>(null); 
+  const [heatmapData, setHeatmapData] = useState<any>(null);
+  const [heatmapView, setHeatmapView] = useState<"sectors" | "nifty50" | "banknifty" | "sensex">("sectors");
   const [selectedStock, setSelectedStock] = useState<WatchlistItem | null>(null);
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("indices");
@@ -154,7 +159,11 @@ export default function App() {
   
   const [optionsChain, setOptionsChain] = useState<any>(null);
   const [newsData, setNewsData] = useState<any[]>([]);
+  const [institutionalData, setInstitutionalData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [chartData, setChartData] = useState<any[]>([]);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [chartSymbol, setChartSymbol] = useState<string>("");
 
   useEffect(() => {
     const stored = localStorage.getItem(WATCHLIST_KEY);
@@ -277,7 +286,7 @@ export default function App() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setIsCopilotOpen(true); }
-      if (e.key === 'Escape') { setActiveOverlay(null); setIsCopilotOpen(false); }
+      if (e.key === 'Escape') { setActiveOverlay(null); setIsCopilotOpen(false); setChartData([]); }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
@@ -290,7 +299,13 @@ export default function App() {
         .then(data => setOptionsChain(data))
         .catch(() => setOptionsChain(null));
     }
-  }, [activeOverlay]);
+    if (activeOverlay === 'heatmap') {
+      fetch(`/api/heatmap?view=${heatmapView}`)
+        .then(res => res.json())
+        .then(data => setHeatmapData(data))
+        .catch(() => setHeatmapData(null));
+    }
+  }, [activeOverlay, heatmapView]);
 
   const FALLBACK_NEWS = [
     { title: "SEBI issues new guidelines for FII investments", link: "#", source: "Markets" },
@@ -304,7 +319,7 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
-          setNewsData(data.slice(0, 5));
+          setNewsData(data.slice(0, 7));
         } else {
           setNewsData(FALLBACK_NEWS);
         }
@@ -315,16 +330,43 @@ export default function App() {
       .then(res => res.json())
       .then(data => setSentiment(data))
       .catch(() => setSentiment(null));
+      
+    fetch('/api/institutional')
+      .then(res => res.json())
+      .then(data => setInstitutionalData(data))
+      .catch(console.error);
   }, []);
 
   const openStockDetail = useCallback(async (stock: WatchlistItem) => {
     setSelectedStock(stock);
     setActiveOverlay('detail');
     setStockInsight({ text: "", loading: true });
+    setChartLoading(true);
     
-    const context = `Symbol: ${stock.symbol}, Price: ${stock.ltp}, Change: ${stock.percentChange}%`;
-    const res = await callCopilotAPI(`Analyze ${stock.symbol} - give a 2-sentence professional summary of the move.`, context);
-    setStockInsight({ text: res.text, loading: false });
+    try {
+      const [chartRes, insightRes] = await Promise.all([
+        fetch(`/api/history?symbol=${stock.symbol}&days=90`),
+        callCopilotAPI(`Analyze ${stock.symbol} - give a 2-sentence professional summary of the move.`, `Symbol: ${stock.symbol}, Price: ${stock.ltp}, Change: ${stock.percentChange}%`)
+      ]);
+      
+      if (chartRes.ok) {
+        const chartData = await chartRes.json();
+        if (chartData.candles) {
+          const formatted = chartData.candles.map((c: any) => ({
+            time: c.time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close
+          }));
+          setChartData(formatted);
+        }
+      }
+      setStockInsight({ text: insightRes.text, loading: false });
+    } catch (err) {
+      setStockInsight({ text: "Failed to load data", loading: false });
+    }
+    setChartLoading(false);
   }, []);
 
   const handleCopilotSubmit = useCallback(async (e?: React.FormEvent) => {
@@ -333,7 +375,7 @@ export default function App() {
     
     setCopilotResponse({ text: "", loading: true, sources: [] });
     
-    const context = `Current indices: ${indices.map(i => `${i.name}: ${i.value}`).join(', ')}`;
+    const context = `Current indices: ${indices.map(i => `${i.name}: ${i.value}`).join(', ')}. ${institutionalData ? `Institutional Flows (in Crores): FII Net ${institutionalData.fii.net}, DII Net ${institutionalData.dii.net}.` : ''}`;
     const res = await callCopilotAPI(copilotQuery, context);
     setCopilotResponse({ text: res.text, loading: false, sources: res.sources || [] });
   }, [copilotQuery, indices]);
@@ -356,11 +398,8 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 bg-zinc-950 text-zinc-300 select-none overflow-hidden font-sans flex flex-col h-screen">
-      <main className="flex-1 w-full p-2 lg:p-4 grid grid-cols-12 grid-rows-[repeat(12,minmax(0,1fr))] gap-2 lg:gap-3 overflow-hidden">
-        
-        
-        
-        <header className="col-span-12 row-span-1 flex items-center justify-between border-b border-white/5 pb-2">
+      <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-4">
+        <header className="flex items-center justify-between border-b border-white/5 pb-2">
           <div className="flex items-center gap-6 overflow-x-auto no-scrollbar pr-4">
             <div className="flex items-center gap-2 group cursor-pointer">
               <Zap size={20} className="text-amber-500 fill-amber-500 group-hover:scale-110 transition-transform" />
@@ -401,7 +440,9 @@ export default function App() {
             </button>
           </div>
         </header>
+      </div>
 
+      <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 grid grid-cols-12 grid-rows-[repeat(11,minmax(0,1fr))] gap-2 lg:gap-3 overflow-hidden pt-1 lg:pt-2">
         <section className="col-span-12 lg:col-span-3 row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col overflow-hidden">
           <WidgetHeader title="Terminal Monitor" icon={Activity} />
           <div className="relative mb-3">
@@ -484,22 +525,41 @@ export default function App() {
           </div>
         </section>
 
-        <section className="hidden lg:grid col-span-9 row-span-4 grid-cols-12 gap-3">
-          <div className="col-span-9 bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="Sector Performance Matrix" icon={Layers} />
-            <div className="grid grid-cols-4 grid-rows-2 gap-2 h-[calc(100%-24px)]">
-              {displaySectors.slice(0, 8).map((s, i) => {
-                const isPos = (s.percentChange || 0) > 0;
-                const intensity = Math.min(Math.abs(s.percentChange || 0) / 3, 1);
-                const bg = isPos ? `rgba(16, 185, 129, ${0.05 + intensity * 0.4})` : `rgba(244, 63, 94, ${0.05 + intensity * 0.4})`;
+        <section className="hidden lg:flex col-span-9 row-span-4 gap-3">
+          <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-2">
+                  <Layers size={12} className="text-amber-500" />
+                  <span className="text-[9px] font-black text-amber-500 uppercase tracking-widest">Market Heatmap</span>
+                </div>
+                <button 
+                  onClick={() => setActiveOverlay('heatmap')}
+                  className="text-[8px] text-zinc-500 hover:text-amber-500 uppercase font-bold"
+                >
+                  Open →
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 grid-rows-2 gap-1 h-[calc(100%-24px)] p-1">
+              {displaySectors.slice(0, 8).map((s: any, i: number) => {
+                const pct = s.percentChange || 0;
+                const isPos = pct > 0;
+                const intensity = Math.min(Math.abs(pct) / 3, 1);
+                const bg = isPos 
+                  ? `rgba(16,185,129,${0.1 + intensity * 0.5})`
+                  : `rgba(244,63,94,${0.1 + intensity * 0.5})`;
                 return (
-                  <div key={s.symbol || i} className="rounded-lg border border-white/5 flex flex-col justify-center px-4 hover:scale-[1.02] transition-transform cursor-pointer" style={{ backgroundColor: bg }}>
-                    <span className="text-[9px] font-black text-zinc-400 uppercase tracking-tighter mb-0.5">{s.name}</span>
-                    <div className="flex items-center gap-2">
-                       <Mono className={`text-base font-bold ${isPos ? 'text-emerald-400' : 'text-rose-500'}`}>
-                         {(s.percentChange || 0) > 0 ? '+' : ''}{(s.percentChange || 0).toFixed(2)}%
-                       </Mono>
-                    </div>
+                  <div 
+                    key={s.symbol || i} 
+                    className="rounded border border-white/5 flex flex-col justify-center items-center hover:scale-105 transition-transform cursor-pointer"
+                    style={{ background: bg }}
+                    onClick={() => setActiveOverlay('heatmap')}
+                  >
+                    <span className="text-[8px] font-black text-zinc-300 truncate">{s.name}</span>
+                    <Mono className={`text-[10px] font-bold ${isPos ? 'text-emerald-400' : 'text-rose-500'}`}>
+                      {pct > 0 ? '+' : ''}{pct.toFixed(1)}%
+                    </Mono>
                   </div>
                 );
               })}
@@ -532,61 +592,64 @@ export default function App() {
           </div>
         </section>
 
-        <section className="hidden lg:grid col-span-6 row-span-7 grid-cols-2 gap-3">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3 overflow-hidden flex flex-col">
-             <WidgetHeader title="Delivery Breakouts" icon={Target} />
-             <div className="space-y-2 mt-2 overflow-y-auto no-scrollbar">
-                {(gainers.length > 0 ? gainers.slice(0, 3) : [
-                  { symbol: 'COALINDIA', percentChange: 3.4, volume: 2800000 },
-                  { symbol: 'HAL', percentChange: 1.2, volume: 2100000 },
-                  { symbol: 'ZOMATO', percentChange: 4.5, volume: 45000000 }
-                ]).map((item: any, i: number) => (
-                  <div key={item.symbol + i} className="p-2.5 bg-zinc-950/50 rounded-lg border border-white/5 flex justify-between items-center group cursor-pointer hover:border-amber-500/30 transition-all shrink-0">
-                     <span className="text-[11px] font-black text-zinc-200">{item.symbol}</span>
-                     <div className="flex gap-4">
-                        <div className="text-right">
-                           <div className="text-[8px] text-zinc-600 uppercase font-bold">CHG%</div>
-                           <Mono className="text-[10px] text-emerald-500 font-bold">+{item.percentChange.toFixed(2)}%</Mono>
-                        </div>
-                        <div className="text-right">
-                           <div className="text-[8px] text-zinc-600 uppercase font-bold">VOL</div>
-                           <Mono className="text-[10px] text-amber-500">{(item.volume / 1000000).toFixed(1)}x</Mono>
-                        </div>
-                     </div>
-                  </div>
-                ))}
-                <button onClick={() => setActiveOverlay('scanner')} className="w-full py-2 bg-zinc-900 rounded text-[9px] font-black uppercase text-zinc-500 hover:text-white transition-colors border border-white/5 shrink-0 mt-auto">View Scanner</button>
-             </div>
-          </div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col">
-             <WidgetHeader title="F&O Pulse" icon={Cpu} />
-             <div 
-               onClick={() => setActiveOverlay('options')}
-               className="mt-2 p-4 bg-zinc-950/50 rounded-xl border border-emerald-500/10 cursor-pointer hover:bg-zinc-800 transition-all group flex-1 flex flex-col justify-center"
-             >
-                <div className="flex justify-between items-center mb-4">
-                   <div className="flex flex-col">
-                     <span className="text-[10px] font-black text-zinc-500 uppercase tracking-tight">NIFTY PCR</span>
-                     <Mono className="text-xl font-black text-emerald-400">{optionsChain?.pcr || optionsChain?.pcr === 0 ? optionsChain.pcr : '1.24'}</Mono>
-                   </div>
-                   <div className="text-right flex flex-col items-end">
-                      <span className="text-[9px] font-bold text-zinc-600 uppercase mb-1">Max Pain</span>
-                      <Mono className="text-sm font-bold text-white">{(optionsChain?.maxPain || 22400).toLocaleString()}</Mono>
-                   </div>
+        <section className="hidden lg:flex col-span-4 row-span-4 gap-2">
+          <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <LineChart size={14} className="text-amber-500" />
+                <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Price Chart</span>
+              </div>
+            </div>
+            <select 
+              className="mb-3 bg-zinc-950 text-[9px] text-zinc-300 border border-white/10 rounded px-2 py-1.5"
+              value={chartSymbol}
+              onChange={async (e) => {
+                const sym = e.target.value;
+                if (!sym) return;
+                setChartSymbol(sym);
+                setChartLoading(true);
+                try {
+                  const res = await fetch(`/api/history?symbol=${sym}&days=90`);
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (data.candles) {
+                      setChartData(data.candles.map((c: any) => ({
+                        time: c.time,
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close
+                      })));
+                    }
+                  }
+                } catch {}
+                setChartLoading(false);
+              }}
+            >
+              <option value="">Select Stock to Chart</option>
+              {watchlist.map(w => (
+                <option key={w.symbol} value={w.symbol}>{w.symbol}</option>
+              ))}
+            </select>
+            <div className="flex-1 min-h-0">
+              {chartLoading ? (
+                <div className="w-full h-full flex items-center justify-center">
+                  <Loader2 className="animate-spin text-zinc-600" size={24} />
                 </div>
-                <div className="flex gap-1 h-12 items-end mb-3">
-                   {[40, 65, 80, 50, 95, 70, 55, 85, 60].map((h, i) => (
-                     <div key={i} className="flex-1 bg-emerald-500/20 rounded-t-sm group-hover:bg-emerald-500/40 transition-colors" style={{ height: `${h}%` }} />
-                   ))}
+              ) : chartData.length > 0 ? (
+                <RealCandlestickChart data={chartData} height={250} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-zinc-500 text-[10px]">
+                  Select a stock to view chart
                 </div>
-                <div className="text-[8px] text-zinc-600 font-black uppercase text-center tracking-widest group-hover:text-emerald-500/60 transition-colors">View Options Chain</div>
-             </div>
+              )}
+            </div>
           </div>
         </section>
 
-        <section className="hidden lg:flex col-span-3 row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col">
+        <section className="hidden lg:flex col-span-5 row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col">
            <WidgetHeader title="Intelligence Hub" icon={Globe} />
-           <div className="flex-1 overflow-y-auto no-scrollbar space-y-4 pr-1">
+           <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pr-1">
               <div className="p-3 bg-zinc-950/40 border border-white/5 rounded-lg flex flex-col gap-2">
                  <div className="flex justify-between items-center">
                     <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest italic flex items-center gap-1">
@@ -602,7 +665,33 @@ export default function App() {
                  <div className="text-[8px] text-zinc-600 italic tracking-tighter">Market sentiment reflects aggressive buying.</div>
               </div>
 
-<div className="flex-1 overflow-y-auto no-scrollbar space-y-3">
+              {/* FII / DII Flow Widget */}
+              <div className="flex gap-2">
+                <div className="flex-1 p-2 bg-zinc-950/40 border border-white/5 rounded-lg flex flex-col justify-between">
+                  <span className="text-[8px] font-black text-zinc-500 uppercase flex items-center gap-1">
+                    <Globe size={8} /> FII Flow
+                  </span>
+                  <div className="mt-1 flex items-end justify-between">
+                    <Mono className={`text-sm font-bold ${institutionalData && institutionalData.fii.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {institutionalData ? `${institutionalData.fii.net >= 0 ? '+' : ''}${institutionalData.fii.net}` : '---'}
+                    </Mono>
+                    <span className="text-[7px] text-zinc-600 font-bold uppercase tracking-widest mb-1.5">Cr</span>
+                  </div>
+                </div>
+                <div className="flex-1 p-2 bg-zinc-950/40 border border-white/5 rounded-lg flex flex-col justify-between">
+                  <span className="text-[8px] font-black text-zinc-500 uppercase flex items-center gap-1">
+                    <Layers size={8} /> DII Flow
+                  </span>
+                  <div className="mt-1 flex items-end justify-between">
+                    <Mono className={`text-sm font-bold ${institutionalData && institutionalData.dii.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {institutionalData ? `${institutionalData.dii.net >= 0 ? '+' : ''}${institutionalData.dii.net}` : '---'}
+                    </Mono>
+                    <span className="text-[7px] text-zinc-600 font-bold uppercase tracking-widest mb-1.5">Cr</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto no-scrollbar space-y-2">
                 {newsData.map((n: any, i: number) => (
                   <a 
                     key={i} 
@@ -620,9 +709,42 @@ export default function App() {
                 ))}
               </div>
            </div>
-           <button onClick={() => setIsCopilotOpen(true)} className="mt-auto w-full py-3 bg-zinc-900/50 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-white hover:border-white/30 transition-all flex items-center justify-center gap-2">
+           <button onClick={() => setIsCopilotOpen(true)} className="mt-auto w-full py-2 bg-zinc-900/50 border border-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-white hover:border-white/30 transition-all flex items-center justify-center gap-2">
              Analyze Today ✨
            </button>
+        </section>
+
+        <section className="hidden lg:flex col-span-4 row-span-3 gap-2">
+          <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden flex flex-col">
+             <WidgetHeader title="Top Movers" icon={Target} extra={<select className="bg-zinc-950 text-[8px] text-zinc-500 border border-white/10 rounded px-1"><option>Gainers</option></select>} />
+             <div className="space-y-1.5 mt-1 overflow-y-auto no-scrollbar">
+                {(gainers.length > 0 ? gainers.slice(0, 5) : [
+                  { symbol: 'COALINDIA', percentChange: 3.4, volume: 2800000 },
+                  { symbol: 'HAL', percentChange: 1.2, volume: 2100000 },
+                  { symbol: 'ZOMATO', percentChange: 4.5, volume: 45000000 }
+                ]).map((item: any, i: number) => (
+                  <div key={item.symbol + i} className="flex items-center justify-between p-1.5 bg-zinc-950/50 rounded border border-white/5 hover:border-amber-500/30 cursor-pointer">
+                     <span className="text-[10px] font-black text-zinc-200">{item.symbol}</span>
+                     <div className="flex items-center gap-2">
+                        <Mono className={`text-[10px] font-bold ${item.percentChange >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                          {item.percentChange > 0 ? '+' : ''}{item.percentChange.toFixed(1)}%
+                        </Mono>
+                        <div className="w-10 h-4 bg-zinc-800 rounded overflow-hidden">
+                          <div className="h-full bg-emerald-500/60" style={{ width: `${Math.min(100, (item.percentChange + 2) * 20)}%` }} />
+                        </div>
+                     </div>
+                  </div>
+                ))}
+             </div>
+          </div>
+          <div className="w-32 bg-zinc-900/20 border border-white/5 rounded-xl p-2 flex flex-col justify-center">
+             <WidgetHeader title="NIFTY PCR" icon={Cpu} />
+             <div className="flex-1 flex flex-col items-center justify-center">
+               <Mono className="text-3xl font-black text-emerald-400">{optionsChain?.pcr || '1.2'}</Mono>
+               <span className="text-[8px] text-zinc-600 mt-1">Max Pain: {optionsChain?.maxPain || '22.4K'}</span>
+               <button onClick={() => setActiveOverlay('options')} className="text-[8px] text-zinc-500 hover:text-amber-500 mt-2">Details →</button>
+             </div>
+          </div>
         </section>
 
       </main>
@@ -651,13 +773,22 @@ export default function App() {
                     <span className="text-[10px] text-zinc-600 font-bold uppercase tracking-[0.2em]">NSE Real-time Feed</span>
                   </div>
                 </div>
-                <button onClick={() => setActiveOverlay(null)} className="p-2 hover:bg-white/5 rounded-full transition-all text-zinc-500 hover:text-white"><X size={28} /></button>
+                <button onClick={() => { setActiveOverlay(null); setChartData([]); }} className="p-2 hover:bg-white/5 rounded-full transition-all text-zinc-500 hover:text-white"><X size={28} /></button>
               </div>
 
               <div className="space-y-10">
                 <div className="space-y-3">
                   <WidgetHeader title="Technical Signature" icon={LineChart} />
-                  <CandlestickChart activeSymbol={selectedStock.symbol} />
+                  {chartLoading ? (
+                    <div className="w-full h-[320px] bg-zinc-900/40 rounded-lg border border-white/5 flex items-center justify-center">
+                      <div className="text-center">
+                        <Loader2 className="animate-spin mx-auto mb-2 text-zinc-600" size={24} />
+                        <span className="text-xs text-zinc-500">Loading chart...</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <RealCandlestickChart data={chartData} height={320} />
+                  )}
                 </div>
 
                 <div className="p-6 bg-zinc-900/40 border border-amber-500/20 rounded-2xl relative overflow-hidden">
@@ -759,6 +890,68 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {activeOverlay === 'heatmap' && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setActiveOverlay(null)} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              className="fixed inset-4 lg:inset-12 bg-zinc-900 border border-white/10 rounded-2xl z-[60] flex flex-col overflow-hidden"
+            >
+              <div className="flex justify-between items-center p-4 border-b border-white/10">
+                <div className="flex items-center gap-3">
+                  <Layers size={20} className="text-amber-500" />
+                  <h3 className="text-xl font-black text-white italic">Market Heatmap</h3>
+                </div>
+                <div className="flex items-center gap-3">
+                  <select 
+                    className="bg-zinc-950 border border-white/10 rounded text-xs text-zinc-400 px-3 py-1.5 uppercase font-bold"
+                    onChange={async (e) => {
+                      setHeatmapView(e.target.value as any);
+                      setHeatmapData(null);
+                      try {
+                        const res = await fetch(`/api/heatmap?view=${e.target.value}`);
+                        if (res.ok) {
+                          const data = await res.json();
+                          setHeatmapData(data);
+                        }
+                      } catch (err) {
+                        console.warn('Heatmap fetch failed:', err);
+                      }
+                    }}
+                    value={heatmapView}
+                  >
+                    <option value="sectors">Sectors</option>
+                    <option value="nifty50">Nifty 50</option>
+                    <option value="banknifty">Bank Nifty</option>
+                    <option value="sensex">Sensex</option>
+                  </select>
+                  <button onClick={() => setActiveOverlay(null)} className="p-2 hover:bg-white/5 rounded-full transition-all">
+                    <X size={24} className="text-zinc-400 hover:text-white" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 p-4 overflow-hidden">
+                {!heatmapData ? (
+                  <div className="w-full h-full flex items-center justify-center">
+                    <div className="text-center">
+                      <Activity size={32} className="mx-auto mb-2 text-zinc-700 animate-pulse" />
+                      <p className="text-zinc-600 text-sm">Loading heatmap data...</p>
+                    </div>
+                  </div>
+                ) : (
+                  <StockHeatmap data={heatmapData} onStockClick={(sym: string) => {
+                    setActiveOverlay(null);
+                    const stock = watchlist.find(w => w.symbol === sym);
+                    if (stock) openStockDetail(stock);
+                  }} />
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {isCopilotOpen && (
           <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[10vh] px-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCopilotOpen(false)} className="absolute inset-0 bg-black/90 backdrop-blur-2xl" />
@@ -787,8 +980,31 @@ export default function App() {
                   </div>
                 ) : copilotResponse.text ? (
                   <div className="space-y-8">
-                    <div className="prose prose-invert prose-lg max-w-none text-zinc-300 font-light">
-                      {copilotResponse.text}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-6 text-zinc-300 font-light text-lg">
+                      <div className="flex items-start gap-4">
+                        <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center shrink-0 mt-1 shadow-[0_0_15px_rgba(245,158,11,0.2)]">
+                          <Bot size={18} />
+                        </div>
+                        <div className="flex-1 space-y-4">
+                          {copilotResponse.text.split('\n').map((line, i) => {
+                            if (!line.trim()) return null;
+                            const isListItem = line.trim().startsWith('- ') || line.trim().match(/^\d+\.\s/);
+                            
+                            // Split line by **text**
+                            const parts = line.split(/(\*\*.*?\*\*)/g);
+                            
+                            return (
+                              <p key={i} className={`leading-relaxed ${isListItem ? 'pl-4 relative before:content-["•"] before:absolute before:left-0 before:text-amber-500' : ''}`}>
+                                {parts.map((part, j) => 
+                                  part.startsWith('**') && part.endsWith('**') 
+                                    ? <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong> 
+                                    : part.replace(/^- |\d+\.\s/, '') // Remove list markers if we use custom bullets
+                                )}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                     {copilotResponse.sources?.length > 0 && (
                       <div className="border-t border-white/10 pt-4">

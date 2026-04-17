@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 
-const NSE_API = "https://nse-api-ruby.vercel.app";
+const STOCK_API = "https://nse-api-ruby.vercel.app";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
 async function fetchStock(symbol: string, forceRefresh = false): Promise<unknown | null> {
-  const cacheKey = symbol;
+  const cacheKey = `quote:${symbol}`;
   if (!forceRefresh) {
     const cached = CACHE.get(cacheKey);
     if (cached && cached.expiry > Date.now()) {
@@ -13,10 +13,12 @@ async function fetchStock(symbol: string, forceRefresh = false): Promise<unknown
   }
 
   try {
-    const res = await fetch(`${NSE_API}/stock?symbol=${symbol}.NS&res=num`);
+    const res = await fetch(`${STOCK_API}/stock?symbol=${symbol}.NS&res=num`, {
+      signal: AbortSignal.timeout(8000),
+    });
     if (!res.ok) return null;
     const data = await res.json();
-    if (data.status === "success") {
+    if (data.status === "success" && data.data) {
       CACHE.set(cacheKey, { data, expiry: Date.now() + 5000 });
       return data;
     }
@@ -38,6 +40,8 @@ interface StockQuote {
   percentChange: number;
   volume: number;
   sector?: string;
+  pe_ratio?: number;
+  market_cap?: number;
   weekHigh52?: number;
   weekLow52?: number;
   timestamp: number;
@@ -52,10 +56,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Symbol required" }, { status: 400 });
   }
 
-  const upperSymbol = symbol.toUpperCase().replace(".NS", "");
-  
+  const upperSymbol = symbol.toUpperCase().replace(".NS", "").replace(".BO", "");
+
   const data = await fetchStock(upperSymbol, forceRefresh);
-  
+
   if (data && (data as any).data) {
     const d = (data as any).data;
     const quote: StockQuote = {
@@ -70,6 +74,8 @@ export async function GET(request: Request) {
       percentChange: d.percent_change || 0,
       volume: d.volume || 0,
       sector: d.sector || "",
+      pe_ratio: d.pe_ratio || 0,
+      market_cap: d.market_cap || 0,
       weekHigh52: d.year_high || 0,
       weekLow52: d.year_low || 0,
       timestamp: Date.now(),
@@ -78,9 +84,9 @@ export async function GET(request: Request) {
   }
 
   // Fallback: generate realistic data
-  const basePrice = 100 + Math.random() * 5000;
-  const change = (Math.random() - 0.5) * basePrice * 0.02;
-  
+  const basePrice = (100 + Math.random() * 5000);
+  const change = parseFloat(((Math.random() - 0.5) * basePrice * 0.02).toFixed(2));
+
   const quote: StockQuote = {
     symbol: upperSymbol,
     name: upperSymbol,
@@ -89,10 +95,10 @@ export async function GET(request: Request) {
     high: parseFloat((basePrice * 1.01).toFixed(2)),
     low: parseFloat((basePrice * 0.99).toFixed(2)),
     close: parseFloat((basePrice - change).toFixed(2)),
-    change: parseFloat(change.toFixed(2)),
+    change: change,
     percentChange: parseFloat((change / basePrice * 100).toFixed(2)),
     volume: Math.floor(1000000 + Math.random() * 20000000),
-    sector: "Sector",
+    sector: "Unknown",
     weekHigh52: parseFloat((basePrice * 1.3).toFixed(2)),
     weekLow52: parseFloat((basePrice * 0.7).toFixed(2)),
     timestamp: Date.now(),
