@@ -30,7 +30,8 @@ import {
   TrendingDown,
   Plus,
   Star,
-  Minus
+  Minus,
+  Bell
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSSE } from "@/hooks/useSSE";
@@ -165,6 +166,13 @@ export default function App() {
   const [chartLoading, setChartLoading] = useState(false);
   const [chartSymbol, setChartSymbol] = useState<string>("");
 
+  const [balance, setBalance] = useState(100000);
+  const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number; currentPrice: number; }[]>([]);
+  const [tradeQty, setTradeQty] = useState<string>("10");
+  const [screenerSignals, setScreenerSignals] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<{ symbol: string; targetPrice: number; condition: 'above' | 'below'; triggered: boolean }[]>([]);
+  const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
+
   useEffect(() => {
     const stored = localStorage.getItem(WATCHLIST_KEY);
     if (stored) {
@@ -271,6 +279,24 @@ export default function App() {
           ? { ...w, ltp: data.ltp, change: data.change, percentChange: data.percentChange, volume: data.volume, timestamp: Date.now() }
           : w
       ));
+      setPositions(prev => prev.map(p => 
+        p.symbol === data.symbol ? { ...p, currentPrice: data.ltp } : p
+      ));
+      // Check price alerts
+      setAlerts(prev => prev.map(alert => {
+        if (alert.triggered || alert.symbol !== data.symbol) return alert;
+        const hit = (alert.condition === 'above' && data.ltp >= alert.targetPrice) ||
+                    (alert.condition === 'below' && data.ltp <= alert.targetPrice);
+        if (hit) {
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(`🔔 ZENIT Alert: ${alert.symbol}`, {
+              body: `Price ${alert.condition === 'above' ? 'crossed above' : 'dropped below'} ₹${alert.targetPrice}. Current: ₹${data.ltp}`,
+            });
+          }
+          return { ...alert, triggered: true };
+        }
+        return alert;
+      }));
     }, []),
     onGainersUpdate: useCallback((data: GainerLoser[]) => {
       setGainers(data);
@@ -280,6 +306,9 @@ export default function App() {
     }, []),
     onSectorsUpdate: useCallback((data: SectorData[]) => {
       setSectors(data);
+    }, []),
+    onScreenerUpdate: useCallback((data: any[]) => {
+      setScreenerSignals(data);
     }, []),
   });
 
@@ -375,10 +404,68 @@ export default function App() {
     
     setCopilotResponse({ text: "", loading: true, sources: [] });
     
-    const context = `Current indices: ${indices.map(i => `${i.name}: ${i.value}`).join(', ')}. ${institutionalData ? `Institutional Flows (in Crores): FII Net ${institutionalData.fii.net}, DII Net ${institutionalData.dii.net}.` : ''}`;
+    const context = `Current indices: ${indices.map(i => i.name + ': ' + i.value).join(', ')}. ${institutionalData ? 'Institutional Flows (in Crores): FII Net ' + institutionalData.fii.net + ', DII Net ' + institutionalData.dii.net + '.' : ''} Account Balance: ${balance}.`;
     const res = await callCopilotAPI(copilotQuery, context);
     setCopilotResponse({ text: res.text, loading: false, sources: res.sources || [] });
-  }, [copilotQuery, indices]);
+  }, [copilotQuery, indices, institutionalData, balance]);
+
+  const executeTrade = useCallback((action: 'BUY' | 'SELL') => {
+    if (!selectedStock) return;
+    const qty = parseInt(tradeQty);
+    if (isNaN(qty) || qty <= 0) return;
+    const value = qty * selectedStock.ltp;
+    
+    if (action === 'BUY' && balance < value) {
+      alert("Insufficient Capital!");
+      return;
+    }
+    
+    setPositions(prev => {
+      const existing = prev.find(p => p.symbol === selectedStock.symbol);
+      let newPositions = [...prev];
+      if (action === 'BUY') {
+        setBalance(b => b - value);
+        if (existing) {
+          const newAvg = ((existing.quantity * existing.avgPrice) + value) / (existing.quantity + qty);
+          newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity + qty, avgPrice: newAvg } : p);
+        } else {
+          newPositions.push({ symbol: selectedStock.symbol, quantity: qty, avgPrice: selectedStock.ltp, currentPrice: selectedStock.ltp });
+        }
+      } else {
+        if (!existing || existing.quantity < qty) {
+          alert("Insufficient shares to sell!");
+          return prev;
+        }
+        setBalance(b => b + value);
+        if (existing.quantity === qty) {
+          newPositions = newPositions.filter(p => p.symbol !== selectedStock.symbol);
+        } else {
+          newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity - qty } : p);
+        }
+      }
+      return newPositions;
+    });
+  }, [selectedStock, tradeQty, balance]);
+
+  const addAlert = useCallback(() => {
+    if (!alertInput.symbol || !alertInput.price) return;
+    const price = parseFloat(alertInput.price);
+    if (isNaN(price) || price <= 0) return;
+    // Request notification permission
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+    const existing = positions.find(p => p.symbol === alertInput.symbol.toUpperCase()) || 
+                     watchlist.find(w => w.symbol === alertInput.symbol.toUpperCase());
+    const currentPrice = existing ? (existing as any).ltp ?? (existing as any).currentPrice : 0;
+    setAlerts(prev => [...prev, {
+      symbol: alertInput.symbol.toUpperCase(),
+      targetPrice: price,
+      condition: price >= currentPrice ? 'above' : 'below',
+      triggered: false,
+    }]);
+    setAlertInput({ symbol: '', price: '' });
+  }, [alertInput, positions, watchlist]);
 
   const totalAdvances = breadth?.advances || 1482;
   const totalDeclines = breadth?.declines || 512;
@@ -522,6 +609,34 @@ export default function App() {
                 </div>
               ))
             )}
+          </div>
+          <div className="bg-zinc-950/50 border-t border-white/10 p-4 shrink-0 flex flex-col gap-3">
+              <div className="flex justify-between items-center">
+                 <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-black flex items-center gap-1"><Wallet size={12}/> Paper Portfolio</span>
+                 <Mono className="text-sm font-bold text-emerald-400">₹{balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Mono>
+              </div>
+              <div className="space-y-2 max-h-[150px] overflow-y-auto no-scrollbar">
+                {positions.map(p => {
+                  const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
+                  const pnlPct = (pnl / (p.avgPrice * p.quantity)) * 100;
+                  return (
+                    <div key={p.symbol} onClick={() => openStockDetail({symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0})} className="flex justify-between items-center p-2 bg-zinc-900 rounded border border-white/5 cursor-pointer hover:border-amber-500/30">
+                      <div>
+                        <span className="text-xs font-bold text-white block">{p.symbol}</span>
+                        <span className="text-[9px] text-zinc-500">{p.quantity} @ {p.avgPrice.toFixed(1)}</span>
+                      </div>
+                      <div className="text-right">
+                        <Mono className={`text-xs font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}
+                        </Mono>
+                        <span className={`text-[9px] font-bold block ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                          ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
           </div>
         </section>
 
@@ -691,7 +806,63 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto no-scrollbar space-y-2">
+              {/* Live Screener */}
+              {screenerSignals.length > 0 && (
+                <div className="p-2 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                  <span className="text-[8px] font-black text-amber-500 uppercase tracking-widest flex items-center gap-1 mb-2">
+                    <Zap size={8} /> Live Screener
+                  </span>
+                  <div className="space-y-1">
+                    {screenerSignals.slice(0, 4).map((sig: any, i: number) => (
+                      <div key={sig.symbol + i} className="flex items-center justify-between text-[9px]">
+                        <span className="font-black text-zinc-200">{sig.symbol}</span>
+                        <span className="text-zinc-400">{sig.type}</span>
+                        <Mono className={sig.percentChange >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                          {sig.percentChange >= 0 ? '+' : ''}{sig.percentChange.toFixed(1)}%
+                        </Mono>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Price Alerts */}
+              <div className="p-2 bg-zinc-950/40 border border-white/5 rounded-lg">
+                <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-1 mb-2">
+                  <Bell size={8} /> Price Alerts
+                </span>
+                <div className="flex gap-1 mb-2">
+                  <input
+                    placeholder="SYMBOL"
+                    value={alertInput.symbol}
+                    onChange={e => setAlertInput(prev => ({ ...prev, symbol: e.target.value }))}
+                    className="flex-1 bg-zinc-900 border border-white/10 rounded px-2 py-1 text-[9px] text-white outline-none focus:border-amber-500/50"
+                  />
+                  <input
+                    placeholder="₹ Price"
+                    type="number"
+                    value={alertInput.price}
+                    onChange={e => setAlertInput(prev => ({ ...prev, price: e.target.value }))}
+                    className="flex-1 bg-zinc-900 border border-white/10 rounded px-2 py-1 text-[9px] text-white outline-none focus:border-amber-500/50"
+                  />
+                  <button onClick={addAlert} className="px-2 bg-amber-500/20 text-amber-500 border border-amber-500/30 rounded text-[9px] font-black hover:bg-amber-500/30 transition-all">
+                    +
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-[60px] overflow-y-auto no-scrollbar">
+                  {alerts.map((a, i) => (
+                    <div key={i} className={`flex items-center justify-between text-[8px] px-1 rounded ${a.triggered ? 'opacity-40' : ''}`}>
+                      <span className="font-black text-zinc-300">{a.symbol}</span>
+                      <span className="text-zinc-500">{a.condition === 'above' ? '↑' : '↓'} ₹{a.targetPrice}</span>
+                      <span className={a.triggered ? 'text-zinc-600' : 'text-amber-500'}>{a.triggered ? 'TRIGGERED' : 'WATCHING'}</span>
+                      <button onClick={() => setAlerts(prev => prev.filter((_, j) => j !== i))} className="text-zinc-700 hover:text-rose-500 ml-1">✕</button>
+                    </div>
+                  ))}
+                  {alerts.length === 0 && <p className="text-[8px] text-zinc-700 italic">No alerts set.</p>}
+                </div>
+              </div>
+
+              <div className="space-y-2">
                 {newsData.map((n: any, i: number) => (
                   <a 
                     key={i} 
@@ -818,6 +989,39 @@ export default function App() {
                      </div>
                    ))}
                 </div>
+
+                <div className="bg-zinc-900/60 border border-white/10 rounded-2xl p-6">
+                  <WidgetHeader title="Execution Engine" icon={Target} />
+                  <div className="flex flex-col gap-4 mt-2">
+                    <div className="flex items-center gap-4">
+                       <div className="flex-1">
+                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Quantity</label>
+                         <input 
+                           type="number" 
+                           value={tradeQty} 
+                           onChange={(e) => setTradeQty(e.target.value)}
+                           className="w-full bg-zinc-950 border border-white/10 rounded-lg p-3 text-white font-mono outline-none focus:border-amber-500 transition-all"
+                         />
+                       </div>
+                       <div className="flex-1">
+                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Total Margin</label>
+                         <div className="w-full bg-zinc-950/50 border border-white/5 rounded-lg p-3 text-amber-500 font-mono flex items-center justify-between">
+                           <span>₹</span>
+                           <span>{((parseInt(tradeQty) || 0) * selectedStock.ltp).toLocaleString(undefined, {maximumFractionDigits:2})}</span>
+                         </div>
+                       </div>
+                    </div>
+                    <div className="flex gap-4">
+                      <button onClick={() => executeTrade('BUY')} className="flex-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
+                        Buy Market
+                      </button>
+                      <button onClick={() => executeTrade('SELL')} className="flex-1 bg-rose-500/20 text-rose-400 border border-rose-500/50 hover:bg-rose-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
+                        Sell Market
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
               </div>
             </motion.div>
           </>
@@ -884,6 +1088,38 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {/* OI Visualizer */}
+              {optionsChain?.strikes && (
+                <div className="border-t border-white/10 p-6 shrink-0 bg-zinc-950">
+                  <div className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Activity size={12} className="text-amber-500" /> Open Interest Wall Map
+                    <span className="ml-auto flex items-center gap-3 text-[8px] normal-case font-medium">
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> CE Resistance</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> PE Support</span>
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                    {optionsChain.strikes.slice(0, 12).map((s: any, i: number) => {
+                      const maxOI = Math.max(...optionsChain.strikes.map((x: any) => Math.max(x.ce?.oi || 0, x.pe?.oi || 0)));
+                      const ceWidth = maxOI > 0 ? ((s.ce?.oi || 0) / maxOI) * 100 : 0;
+                      const peWidth = maxOI > 0 ? ((s.pe?.oi || 0) / maxOI) * 100 : 0;
+                      const isATM = Math.abs(s.strike - optionsChain.spotPrice) < 25;
+                      return (
+                        <div key={s.strike + i} className="space-y-1">
+                          <div className="flex justify-between text-[8px] text-zinc-500">
+                            <span className={isATM ? 'text-amber-500 font-black' : ''}>{s.strike.toLocaleString()}{isATM ? ' ATM' : ''}</span>
+                            <span>{((s.ce?.oi || 0)/100000).toFixed(1)}L / {((s.pe?.oi || 0)/100000).toFixed(1)}L</span>
+                          </div>
+                          <div className="flex h-2 gap-0.5 bg-zinc-900 rounded overflow-hidden">
+                            <div className="bg-rose-500/80 rounded-l transition-all" style={{ width: `${ceWidth/2}%` }} />
+                            <div className="bg-emerald-500/80 rounded-r ml-auto transition-all" style={{ width: `${peWidth/2}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </motion.div>
           </>
         )}

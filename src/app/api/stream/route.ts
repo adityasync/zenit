@@ -433,6 +433,18 @@ export async function GET(request: NextRequest) {
 
             sendEvent("gainers", gainers.filter(g => g.percentChange > 0));
             sendEvent("losers", losers.filter(l => l.percentChange < 0));
+
+            // ── Live Screener ──
+            const screenerSignals = allStocks
+              .filter(s => Math.abs(s.percent_change) >= 3 || s.volume > 5000000)
+              .slice(0, 6)
+              .map(s => ({
+                symbol: s.symbol,
+                type: s.percent_change >= 3 ? '🚀 Breakout' : s.percent_change <= -3 ? '🔴 Breakdown' : '⚡ Volume Shock',
+                ltp: s.last_price,
+                percentChange: s.percent_change,
+              }));
+            sendEvent("screener", screenerSignals);
           } else {
             sendEvent("gainers", getDefaultGainers());
             sendEvent("losers", getDefaultLosers());

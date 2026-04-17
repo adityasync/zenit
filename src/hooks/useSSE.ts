@@ -11,6 +11,7 @@ interface UseSSEOptions {
   onGainersUpdate?: (gainers: GainerLoser[]) => void;
   onLosersUpdate?: (losers: GainerLoser[]) => void;
   onSectorsUpdate?: (sectors: SectorData[]) => void;
+  onScreenerUpdate?: (signals: any[]) => void;
   onError?: (error: Event) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
@@ -109,6 +110,16 @@ export function useSSE(options: UseSSEOptions = {}) {
         optionsRef.current.onSectorsUpdate?.(data);
       } catch (error) {
         console.error("Failed to parse sectors:", error);
+      }
+    });
+
+    eventSource.addEventListener("screener", (event) => {
+      if (isUnmountedRef.current) return;
+      try {
+        const data = JSON.parse(event.data);
+        optionsRef.current.onScreenerUpdate?.(data);
+      } catch (error) {
+        console.error("Failed to parse screener:", error);
       }
     });
 
