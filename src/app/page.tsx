@@ -31,7 +31,9 @@ import {
   Plus,
   Star,
   Minus,
-  Bell
+  Bell,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSSE } from "@/hooks/useSSE";
@@ -39,7 +41,7 @@ import { MobileNav, MobileTab } from "@/components/mobile-nav";
 import type { IndexData, StockQuote, MarketBreadth, GainerLoser, SectorData, SentimentData } from "@/types/market";
 import type { LucideIcon } from "lucide-react";
 
-const WATCHLIST_KEY = "nextick:watchlist";
+const WATCHLIST_KEY = "zenit:watchlist";
 
 const formatPrice = (val: number) => {
   if (typeof val !== 'number' || isNaN(val)) return "0.00";
@@ -50,13 +52,20 @@ const Mono = ({ children, className = "" }: { children: React.ReactNode; classNa
   <span className={`font-mono tracking-tighter ${className}`} style={{ fontVariantNumeric: 'tabular-nums' } as React.CSSProperties}>{children}</span>
 );
 
-const WidgetHeader = ({ title, icon: Icon, extra }: { title: string; icon?: LucideIcon; extra?: React.ReactNode }) => (
+const WidgetHeader = ({ title, icon: Icon, extra, onExpand }: { title: string; icon?: LucideIcon; extra?: React.ReactNode; onExpand?: () => void }) => (
   <div className="flex items-center justify-between mb-2">
     <div className="flex items-center gap-2">
       {Icon && <Icon size={12} className="text-zinc-500" />}
       <span className="text-[10px] font-black uppercase tracking-[0.15em] text-zinc-500">{title}</span>
     </div>
-    {extra}
+    <div className="flex items-center gap-2">
+      {extra}
+      {onExpand && (
+        <button onClick={onExpand} className="text-zinc-700 hover:text-amber-500 transition-colors p-0.5 rounded hover:bg-white/5" title="Expand">
+          <Maximize2 size={10} />
+        </button>
+      )}
+    </div>
   </div>
 );
 
@@ -172,6 +181,7 @@ export default function App() {
   const [screenerSignals, setScreenerSignals] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<{ symbol: string; targetPrice: number; condition: 'above' | 'below'; triggered: boolean }[]>([]);
   const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem(WATCHLIST_KEY);
@@ -315,7 +325,7 @@ export default function App() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setIsCopilotOpen(true); }
-      if (e.key === 'Escape') { setActiveOverlay(null); setIsCopilotOpen(false); setChartData([]); }
+      if (e.key === 'Escape') { setActiveOverlay(null); setIsCopilotOpen(false); setChartData([]); setExpandedSection(null); }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
@@ -485,12 +495,11 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 bg-zinc-950 text-zinc-300 select-none overflow-hidden font-sans flex flex-col h-screen">
-      <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-4">
+      <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-3">
         <header className="flex items-center justify-between border-b border-white/5 pb-2">
           <div className="flex items-center gap-6 overflow-x-auto no-scrollbar pr-4">
-            <div className="flex items-center gap-2 group cursor-pointer">
-              <Zap size={20} className="text-amber-500 fill-amber-500 group-hover:scale-110 transition-transform" />
-              <span className="font-black italic tracking-tighter text-2xl text-white">ZENIT</span>
+            <div className="flex items-center gap-2 group cursor-pointer shrink-0 ml-4" onClick={() => window.location.reload()}>
+              <img src="/icons/logo.png" alt="ZENIT Logo" className="w-7 h-7 object-contain group-hover:scale-110 transition-transform" />
             </div>
             <div className="h-10 w-[1px] bg-white/10 mx-2" />
             {(indices.length > 0 ? indices : [
@@ -531,7 +540,7 @@ export default function App() {
 
       <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 grid grid-cols-12 grid-rows-[repeat(11,minmax(0,1fr))] gap-2 lg:gap-3 overflow-hidden pt-1 lg:pt-2">
         <section className="col-span-12 lg:col-span-3 row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col overflow-hidden">
-          <WidgetHeader title="Terminal Monitor" icon={Activity} />
+          <WidgetHeader title="Terminal Monitor" icon={Activity} onExpand={() => setExpandedSection('Watchlist')} />
           <div className="relative mb-3">
              <SearchIcon size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
              <input 
@@ -611,10 +620,13 @@ export default function App() {
             )}
           </div>
           <div className="bg-zinc-950/50 border-t border-white/10 p-4 shrink-0 flex flex-col gap-3">
-              <div className="flex justify-between items-center">
+               <div className="flex justify-between items-center">
                  <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-black flex items-center gap-1"><Wallet size={12}/> Paper Portfolio</span>
-                 <Mono className="text-sm font-bold text-emerald-400">₹{balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Mono>
-              </div>
+                 <div className="flex items-center gap-2">
+                   <Mono className="text-sm font-bold text-emerald-400">₹{balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Mono>
+                   <button onClick={() => setExpandedSection('Portfolio')} className="text-zinc-700 hover:text-amber-500 transition-colors" title="Expand"><Maximize2 size={10} /></button>
+                 </div>
+               </div>
               <div className="space-y-2 max-h-[150px] overflow-y-auto no-scrollbar">
                 {positions.map(p => {
                   const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
@@ -682,7 +694,7 @@ export default function App() {
           </div>
           
           <div className="col-span-3 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col justify-between">
-            <WidgetHeader title="Breadth Gauge" icon={BarChart3} />
+            <WidgetHeader title="Breadth Gauge" icon={BarChart3} onExpand={() => setExpandedSection('Breadth Gauge')} />
             <div className="flex-1 flex flex-col justify-center gap-4 px-2">
                <div className="flex justify-between items-end">
                   <div className="flex flex-col">
@@ -763,7 +775,7 @@ export default function App() {
         </section>
 
         <section className="hidden lg:flex col-span-5 row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col">
-           <WidgetHeader title="Intelligence Hub" icon={Globe} />
+           <WidgetHeader title="Intelligence Hub" icon={Globe} onExpand={() => setExpandedSection('Intelligence Hub')} />
            <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pr-1">
               <div className="p-3 bg-zinc-950/40 border border-white/5 rounded-lg flex flex-col gap-2">
                  <div className="flex justify-between items-center">
@@ -887,7 +899,7 @@ export default function App() {
 
         <section className="hidden lg:flex col-span-4 row-span-3 gap-2">
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden flex flex-col">
-             <WidgetHeader title="Top Movers" icon={Target} extra={<select className="bg-zinc-950 text-[8px] text-zinc-500 border border-white/10 rounded px-1"><option>Gainers</option></select>} />
+             <WidgetHeader title="Top Movers" icon={Target} extra={<select className="bg-zinc-950 text-[8px] text-zinc-500 border border-white/10 rounded px-1"><option>Gainers</option></select>} onExpand={() => setExpandedSection('Top Movers')} />
              <div className="space-y-1.5 mt-1 overflow-y-auto no-scrollbar">
                 {(gainers.length > 0 ? gainers.slice(0, 5) : [
                   { symbol: 'COALINDIA', percentChange: 3.4, volume: 2800000 },
@@ -919,6 +931,189 @@ export default function App() {
         </section>
 
       </main>
+
+      {/* ── Expanded Section Overlay ── */}
+      <AnimatePresence>
+        {expandedSection && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setExpandedSection(null)}
+              className="fixed inset-0 bg-black/80 backdrop-blur-xl z-[150]"
+            />
+            <motion.div
+              initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.94, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 250 }}
+              className="fixed inset-3 lg:inset-6 bg-zinc-950 border border-white/10 rounded-2xl z-[160] flex flex-col overflow-hidden shadow-2xl"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0 bg-zinc-900/50">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <h2 className="text-base font-black text-white uppercase tracking-widest italic">{expandedSection}</h2>
+                  <span className="text-[9px] text-zinc-600 font-bold uppercase tracking-widest">Live Feed</span>
+                </div>
+                <button
+                  onClick={() => setExpandedSection(null)}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10 rounded-lg text-xs font-black uppercase tracking-widest transition-all"
+                >
+                  <Minimize2 size={12} /> Close
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-auto p-6 no-scrollbar">
+
+                {expandedSection === 'Watchlist' && (
+                  <div className="h-full flex flex-col gap-4 max-w-2xl mx-auto">
+                    <div className="relative">
+                      <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
+                      <input type="text" placeholder="Search stocks..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                        className="w-full bg-zinc-900 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-zinc-300 outline-none focus:border-amber-500/50 transition-all" />
+                    </div>
+                    <div className="flex-1 space-y-2 overflow-y-auto no-scrollbar">
+                      {watchlist.map((stock) => (
+                        <div key={stock.symbol} onClick={() => { openStockDetail(stock); setExpandedSection(null); }}
+                          className="flex items-center justify-between p-4 rounded-xl bg-zinc-900/50 hover:bg-white/5 cursor-pointer border border-white/5 hover:border-amber-500/30 transition-all group">
+                          <div>
+                            <div className="text-lg font-black text-white group-hover:text-amber-400 transition-colors">{stock.symbol}</div>
+                            <div className="text-xs text-zinc-500">{stock.name}</div>
+                          </div>
+                          <div className="text-right">
+                            <Mono className={`text-xl font-bold ${stock.percentChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{formatPrice(stock.ltp)}</Mono>
+                            <div className={`text-sm font-black ${stock.percentChange >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{stock.percentChange > 0 ? '+' : ''}{stock.percentChange.toFixed(2)}%</div>
+                          </div>
+                        </div>
+                      ))}
+                      {watchlist.length === 0 && <div className="text-center py-20 text-zinc-600">Watchlist is empty. Search above to add stocks.</div>}
+                    </div>
+                  </div>
+                )}
+
+                {expandedSection === 'Intelligence Hub' && (
+                  <div className="h-full max-w-3xl mx-auto flex flex-col gap-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-4 bg-zinc-900/60 border border-white/5 rounded-xl flex flex-col gap-2">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-1"><Flame size={12} className="text-amber-500" /> Sentiment</span>
+                        <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 68}%` }} /></div>
+                        <Mono className="text-2xl font-black text-emerald-400">{sentiment?.label || 'GREED'} <span className="text-sm text-zinc-500">({sentiment?.score || 68})</span></Mono>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[{ l: 'FII Flow', v: institutionalData?.fii?.net, icon: '🌍' }, { l: 'DII Flow', v: institutionalData?.dii?.net, icon: '🏦' }].map(f => (
+                          <div key={f.l} className="p-4 bg-zinc-900/60 border border-white/5 rounded-xl">
+                            <span className="text-[10px] font-black text-zinc-500 uppercase block mb-2">{f.icon} {f.l}</span>
+                            <Mono className={`text-xl font-bold ${f.v == null || f.v >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{f.v != null ? (f.v >= 0 ? '+' : '') + f.v : '---'} <span className="text-xs text-zinc-600">Cr</span></Mono>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-3 flex-1 overflow-y-auto no-scrollbar">
+                      {newsData.map((n: any, i: number) => (
+                        <a key={i} href={n.link || '#'} target="_blank" rel="noopener noreferrer"
+                          className="flex gap-4 p-4 rounded-xl bg-zinc-900/50 hover:bg-white/5 border border-white/5 hover:border-amber-500/30 transition-all group cursor-pointer">
+                          <div className="flex-1">
+                            <div className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">{n.source}</div>
+                            <p className="text-sm text-zinc-300 group-hover:text-white transition-colors leading-relaxed">{n.title}</p>
+                          </div>
+                          <span className="text-[10px] text-zinc-600 shrink-0 mt-1">{n.timestamp ? new Date(n.timestamp).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'}) : 'Now'}</span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {expandedSection === 'Top Movers' && (
+                  <div className="max-w-4xl mx-auto">
+                    <div className="grid grid-cols-2 gap-6">
+                      {[{ label: 'Top Gainers', data: gainers, color: 'emerald' }, { label: 'Top Losers', data: losers, color: 'rose' }].map(group => (
+                        <div key={group.label}>
+                          <h3 className={`text-sm font-black uppercase tracking-widest mb-4 text-${group.color}-400`}>{group.label}</h3>
+                          <div className="space-y-2">
+                            {(group.data.length > 0 ? group.data : []).map((item: any, i: number) => (
+                              <div key={item.symbol + i} onClick={() => { openStockDetail({ symbol: item.symbol, name: item.symbol, ltp: item.ltp, change: 0, percentChange: item.percentChange, volume: item.volume, timestamp: Date.now() }); setExpandedSection(null); }}
+                                className="flex items-center justify-between p-4 bg-zinc-900/50 rounded-xl border border-white/5 hover:border-amber-500/30 cursor-pointer transition-all">
+                                <div>
+                                  <span className="font-black text-white">{item.symbol}</span>
+                                  <div className="text-xs text-zinc-500 mt-0.5">Vol: {(item.volume / 1000000).toFixed(1)}M</div>
+                                </div>
+                                <Mono className={`text-lg font-bold text-${group.color}-400`}>{item.percentChange > 0 ? '+' : ''}{item.percentChange.toFixed(2)}%</Mono>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {expandedSection === 'Breadth Gauge' && (
+                  <div className="max-w-2xl mx-auto flex flex-col gap-8 mt-8">
+                    <div className="flex justify-between items-center">
+                      <div className="text-center">
+                        <div className="text-5xl font-black text-emerald-400 tabular-nums">{(breadth?.advances || totalAdvances).toLocaleString()}</div>
+                        <div className="text-xs font-black text-emerald-500 uppercase tracking-widest mt-2">Advances</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-4xl font-black text-zinc-500 tabular-nums">{(breadth?.unchanged || 42).toLocaleString()}</div>
+                        <div className="text-xs font-black text-zinc-600 uppercase tracking-widest mt-2">Unchanged</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-5xl font-black text-rose-400 tabular-nums">{(breadth?.declines || totalDeclines).toLocaleString()}</div>
+                        <div className="text-xs font-black text-rose-500 uppercase tracking-widest mt-2">Declines</div>
+                      </div>
+                    </div>
+                    <div className="h-6 w-full bg-zinc-800 rounded-full overflow-hidden flex border border-white/5">
+                      <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${advancePercent}%` }} />
+                      <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: `${100 - advancePercent}%` }} />
+                    </div>
+                    <div className="text-center">
+                      <span className={`text-4xl font-black italic ${advancePercent > 60 ? 'text-emerald-400' : advancePercent < 40 ? 'text-rose-400' : 'text-zinc-400'}`}>
+                        {advancePercent > 60 ? 'Bullish Market' : advancePercent < 40 ? 'Bearish Market' : 'Neutral Market'}
+                      </span>
+                      <div className="text-sm text-zinc-500 mt-2">{advancePercent.toFixed(1)}% stocks advancing today</div>
+                    </div>
+                  </div>
+                )}
+
+                {expandedSection === 'Portfolio' && (
+                  <div className="max-w-3xl mx-auto flex flex-col gap-6">
+                    <div className="flex justify-between items-center p-6 bg-zinc-900/60 border border-white/10 rounded-2xl">
+                      <div>
+                        <div className="text-xs text-zinc-500 uppercase font-black tracking-widest mb-1">Available Capital</div>
+                        <Mono className="text-3xl font-black text-emerald-400">₹{balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Mono>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-zinc-500 uppercase font-black tracking-widest mb-1">Open Positions</div>
+                        <div className="text-3xl font-black text-white">{positions.length}</div>
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      {positions.length === 0 && <div className="text-center py-16 text-zinc-600">No open positions. Buy stocks via the Stock Detail panel.</div>}
+                      {positions.map(p => {
+                        const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
+                        const pnlPct = (pnl / (p.avgPrice * p.quantity)) * 100;
+                        return (
+                          <div key={p.symbol} onClick={() => { openStockDetail({ symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0 }); setExpandedSection(null); }}
+                            className="flex items-center justify-between p-5 bg-zinc-900/50 rounded-xl border border-white/5 hover:border-amber-500/30 cursor-pointer transition-all">
+                            <div>
+                              <div className="text-lg font-black text-white">{p.symbol}</div>
+                              <div className="text-sm text-zinc-500">{p.quantity} shares @ avg ₹{p.avgPrice.toFixed(2)}</div>
+                              <div className="text-xs text-zinc-600 mt-1">Current: ₹{p.currentPrice.toFixed(2)}</div>
+                            </div>
+                            <div className="text-right">
+                              <Mono className={`text-2xl font-black ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pnl >= 0 ? '+' : ''}₹{pnl.toFixed(2)}</Mono>
+                              <div className={`text-sm font-bold ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       <MobileNav
         activeTab={mobileTab}

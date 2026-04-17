@@ -1,4 +1,4 @@
-# ZENIT ⚡
+# ZENIT
 
 > The Arc Browser of Indian Trading. Signal over Noise.
 
@@ -26,7 +26,7 @@ An AI-native market intelligence cockpit designed exclusively for the Indian ret
 ## Project Structure
 
 ```
-NexTick/
+ZENIT/
 ├── src/
 │   ├── app/                 # Next.js App Router
 │   │   ├── api/stream/      # SSE endpoint

@@ -14,12 +14,12 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ZENIT ⚡ — Indian Market Intelligence",
+  title: "ZENIT — Indian Market Intelligence",
   description: "The Arc Browser of Indian Trading. Signal over Noise.",
   manifest: "/manifest.json",
   icons: {
-    icon: "/favicon.ico",
-    apple: "/apple-touch-icon.png",
+    icon: "/icons/logo.png",
+    apple: "/icons/logo.png",
   },
   appleWebApp: {
     capable: true,
@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   keywords: ["stock market", "NSE", "BSE", "trading", "India", "market intelligence"],
   authors: [{ name: "ZENIT" }],
   openGraph: {
-    title: "ZENIT ⚡ — Indian Market Intelligence",
+    title: "ZENIT — Indian Market Intelligence",
     description: "The Arc Browser of Indian Trading. Signal over Noise.",
     type: "website",
   },
@@ -51,8 +51,8 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="icon" href="/icons/logo.png" sizes="any" />
+        <link rel="apple-touch-icon" href="/icons/logo.png" />
       </head>
       <body className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
         {children}

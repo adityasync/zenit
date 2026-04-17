@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import type { WatchlistItem } from "@/types/market";
 
-const WATCHLIST_KEY = "nextick:watchlist";
+const WATCHLIST_KEY = "zenit:watchlist";
 const MAX_WATCHLIST_ITEMS = 20;
 
 export function useWatchlist() {
