@@ -1,194 +1,91 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from 'next/server';
 
-const NSE_BASE_URL = "https://www.nseindia.com";
-const CACHE = new Map<string, { data: unknown; expiry: number }>();
-
-async function getNseCookies(): Promise<string | null> {
+async function fetchNSEOptionChain(symbol: string) {
+  const nseSymbol = symbol === 'NIFTY' ? 'NIFTY' : symbol === 'BANKNIFTY' ? 'BANKNIFTY' : 'NIFTY';
+  
   try {
-    const response = await fetch(NSE_BASE_URL, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-    return response.headers.getSetCookie?.()?.join("; ") || null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchNSE<T>(endpoint: string, forceRefresh = false): Promise<T | null> {
-  const cacheKey = endpoint;
-  if (!forceRefresh) {
-    const cached = CACHE.get(cacheKey);
-    if (cached && cached.expiry > Date.now()) {
-      return cached.data as T;
-    }
-  }
-
-  try {
-    const cookies = await getNseCookies();
-    const response = await fetch(`${NSE_BASE_URL}${endpoint}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "application/json, text/plain, */*",
-        Referer: "https://www.nseindia.com/",
-        ...(cookies && { Cookie: cookies }),
-      },
-    });
-
-    if (!response.ok) return null;
-
-    const data = await response.json();
-    CACHE.set(cacheKey, { data, expiry: Date.now() + 30000 });
+    const res = await fetch(
+      `https://www.nseindia.com/api/option-chain-indices?symbol=${nseSymbol}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'application/json',
+        }
+      }
+    );
+    
+    if (!res.ok) return null;
+    
+    const data = await res.json();
     return data;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
 
-interface OptionStrike {
-  strike: number;
-  ce: {
-    oi: number;
-    oiChange: number;
-    volume: number;
-    iv: number;
-    ltp: number;
-    bid: number;
-    ask: number;
-  };
-  pe: {
-    oi: number;
-    oiChange: number;
-    volume: number;
-    iv: number;
-    ltp: number;
-    bid: number;
-    ask: number;
-  };
-}
-
-interface OptionsChain {
-  symbol: string;
-  underlying: string;
-  spotPrice: number;
-  pcr: number;
-  maxPain: number;
-  expiry: string;
-  expiryDates: string[];
-  strikes: OptionStrike[];
-  timestamp: number;
+function calculatePCR(data: any) {
+  if (!data?.records) return null;
+  
+  try {
+    const strikes = data.records;
+    let totalCEOI = 0;
+    let totalPEOI = 0;
+    let maxPain = 0;
+    let maxPainOI = 0;
+    
+    const processedStrikes = [];
+    
+    for (const record of strikes) {
+      const strikePrice = record.strikePrice;
+      const ceOI = record.CE?.openInterest || 0;
+      const peOI = record.PE?.openInterest || 0;
+      
+      totalCEOI += ceOI;
+      totalPEOI += peOI;
+      
+      const totalOI = ceOI + peOI;
+      if (totalOI > maxPainOI) {
+        maxPainOI = totalOI;
+        maxPain = strikePrice;
+      }
+      
+      processedStrikes.push({
+        strike: strikePrice,
+        ce: { ltp: record.CE?.lastPrice || 0, oi: ceOI, oiChange: record.CE?.changeinOpenInterest || 0, volume: record.CE?.totalTradedVolume || 0 },
+        pe: { ltp: record.PE?.lastPrice || 0, oi: peOI, oiChange: record.PE?.changeinOpenInterest || 0, volume: record.PE?.totalTradedVolume || 0 }
+      });
+      
+      if (processedStrikes.length >= 15) break;
+    }
+    
+    return {
+      symbol: data.underlying || 'NIFTY',
+      spotPrice: data.records?.[5]?.underlyingValue || 0,
+      pcr: totalPEOI > 0 ? (totalPEOI / totalCEOI).toFixed(2) : '1.00',
+      maxPain,
+      strikes: processedStrikes,
+      totalCEOI,
+      totalPEOI
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const symbol = searchParams.get("symbol") || "NIFTY";
-  const expiry = searchParams.get("expiry");
-
-  const upperSymbol = symbol.toUpperCase();
-
-  const data = await fetchNSE<{
-    records: {
-      expiryDates: string[];
-      data: Array<{
-        strikePrices: number[];
-        options: Array<{
-          PE: {
-            strikePrice: number;
-            expiryDate: string;
-            underlying: string;
-            openInterest: number;
-            changeinOpenInterest: number;
-            totalTradedVolume: number;
-            impliedVolatility: number;
-            lastPrice: number;
-            change: number;
-            bidprice: number;
-            askPrice: number;
-          };
-          CE: {
-            strikePrice: number;
-            expiryDate: string;
-            underlying: string;
-            openInterest: number;
-            changeinOpenInterest: number;
-            totalTradedVolume: number;
-            impliedVolatility: number;
-            lastPrice: number;
-            change: number;
-            bidprice: number;
-            askPrice: number;
-          };
-        }>;
-      }>;
-      underlying: string;
-      spotPrice: number;
-    };
-  }>(`/api/option-chain-indices?symbol=${upperSymbol}`, true);
-
-  if (!data?.records) {
-    return NextResponse.json({ error: "Options data not available" }, { status: 404 });
+  const symbol = searchParams.get('symbol') || 'NIFTY';
+  
+  const nseData = await fetchNSEOptionChain(symbol);
+  
+  if (nseData) {
+    const result = calculatePCR(nseData);
+    if (result) return NextResponse.json(result);
   }
-
-  const expiryDates = data.records.expiryDates || [];
-  const selectedExpiry = expiry || expiryDates[0];
-
-  const optionsData = data.records.data?.find(
-    (d) => d.options[0]?.CE?.expiryDate === selectedExpiry
-  ) || data.records.data?.[0];
-
-  if (!optionsData?.options) {
-    return NextResponse.json({ error: "Options data not available for expiry" }, { status: 404 });
-  }
-
-  const strikes: OptionStrike[] = optionsData.options
-    .filter((opt) => opt.CE && opt.PE)
-    .map((opt) => ({
-      strike: opt.CE.strikePrice,
-      ce: {
-        oi: opt.CE.openInterest || 0,
-        oiChange: opt.CE.changeinOpenInterest || 0,
-        volume: opt.CE.totalTradedVolume || 0,
-        iv: opt.CE.impliedVolatility || 0,
-        ltp: opt.CE.lastPrice || 0,
-        bid: opt.CE.bidprice || 0,
-        ask: opt.CE.askPrice || 0,
-      },
-      pe: {
-        oi: opt.PE.openInterest || 0,
-        oiChange: opt.PE.changeinOpenInterest || 0,
-        volume: opt.PE.totalTradedVolume || 0,
-        iv: opt.PE.impliedVolatility || 0,
-        ltp: opt.PE.lastPrice || 0,
-        bid: opt.PE.bidprice || 0,
-        ask: opt.PE.askPrice || 0,
-      },
-    }))
-    .sort((a, b) => a.strike - b.strike);
-
-  const totalCEOI = strikes.reduce((sum, s) => sum + s.ce.oi, 0);
-  const totalPEOI = strikes.reduce((sum, s) => sum + s.pe.oi, 0);
-  const pcr = totalCEOI > 0 ? totalPEOI / totalCEOI : 0;
-
-  const atmStrike = strikes.reduce((prev, curr) =>
-    Math.abs(curr.strike - (data.records.spotPrice || 0)) <
-    Math.abs(prev.strike - (data.records.spotPrice || 0))
-      ? curr
-      : prev
-  ).strike;
-
-  const chain: OptionsChain = {
-    symbol: upperSymbol,
-    underlying: data.records.underlying || upperSymbol,
-    spotPrice: data.records.spotPrice || 0,
-    pcr: parseFloat(pcr.toFixed(2)),
-    maxPain: atmStrike,
-    expiry: selectedExpiry,
-    expiryDates,
-    strikes,
-    timestamp: Date.now(),
-  };
-
-  return NextResponse.json(chain);
+  
+  // Return error - no mock data
+  return NextResponse.json(
+    { error: 'Live data unavailable. Market may be closed.' },
+    { status: 503 }
+  );
 }

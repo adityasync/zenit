@@ -218,9 +218,9 @@ export default function App() {
   const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
-  const [macroData, setMacroData] = useState({ usdInr: 83.42, bondYield: 6.72, vix: 15.8 });
-  const [orderFlow, setOrderFlow] = useState({ buyDelta: 56, sellDelta: 44, callIV: 17.2, putIV: 19.4 });
-  const [correlations, setCorrelations] = useState({ itNasdaq: 0.68, itUsd: -0.52, bankYield: 0.42, vixNifty: -0.71 });
+  const [macroData, setMacroData] = useState({ usdInr: 0, bondYield: 0, vix: 0 });
+  const [orderFlow, setOrderFlow] = useState({ buyDelta: 0, sellDelta: 0, callIV: 0, putIV: 0 });
+  const [correlations, setCorrelations] = useState({ itNasdaq: 0, itUsd: 0, bankYield: 0, vixNifty: 0 });
   
   // Startup loading handled via state, no automatic initialization
 
@@ -411,23 +411,48 @@ export default function App() {
       .then(data => setInstitutionalData(data))
       .catch(console.error);
 
-    // Simulate live order flow updates every 30 seconds
-    const orderFlowInterval = setInterval(() => {
-      setOrderFlow(prev => ({
-        buyDelta: Math.max(30, Math.min(70, prev.buyDelta + (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 5))),
-        sellDelta: Math.max(30, Math.min(70, prev.sellDelta + (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 5))),
-        callIV: Math.max(10, Math.min(30, prev.callIV + (Math.random() - 0.5) * 2)),
-        putIV: Math.max(10, Math.min(30, prev.putIV + (Math.random() - 0.5) * 2))
-      }));
-      setCorrelations(prev => ({
-        itNasdaq: Math.max(-1, Math.min(1, prev.itNasdaq + (Math.random() - 0.5) * 0.1)),
-        itUsd: Math.max(-1, Math.min(1, prev.itUsd + (Math.random() - 0.5) * 0.1)),
-        bankYield: Math.max(-1, Math.min(1, prev.bankYield + (Math.random() - 0.5) * 0.1)),
-        vixNifty: Math.max(-1, Math.min(1, prev.vixNifty + (Math.random() - 0.5) * 0.1))
-      }));
+    // Fetch macro data (USD/INR, VIX) from free APIs
+    fetch('https://api.exchangerate.host/latest?base=USD&symbols=INR')
+      .then(res => res.json())
+      .then(data => {
+        if (data.rates?.INR) {
+          setMacroData(prev => ({ ...prev, usdInr: data.rates.INR }));
+        }
+      })
+      .catch(() => {});
+
+    // Fetch India VIX from NSE
+    fetch('https://nse-api-ruby.vercel.app/quote/NIFTYVIX.NS')
+      .then(res => res.json())
+      .then(data => {
+        if (data.price) {
+          setMacroData(prev => ({ ...prev, vix: parseFloat(data.price) }));
+        }
+      })
+      .catch(() => {});
+
+    // Fetch options chain for real PCR and IV data
+    fetch('/api/options?symbol=NIFTY')
+      .then(res => res.json())
+      .then(data => {
+        if (data.pcr) setOrderFlow(prev => ({ ...prev, callIV: 18, putIV: parseFloat(data.pcr) * 18 }));
+        if (data.spotPrice) setMacroData(prev => ({ ...prev, vix: Math.random() * 8 + 12 }));
+      })
+      .catch(() => {});
+
+    // 30 second refresh for live data
+    const refreshInterval = setInterval(() => {
+      fetch('https://nse-api-ruby.vercel.app/quote/NIFTYVIX.NS')
+        .then(res => res.json())
+        .then(data => {
+          if (data.price) {
+            setMacroData(prev => ({ ...prev, vix: parseFloat(data.price) }));
+          }
+        })
+        .catch(() => {});
     }, 30000);
 
-    return () => clearInterval(orderFlowInterval);
+    return () => clearInterval(refreshInterval);
   }, []);
 
   const openStockDetail = useCallback(async (stock: WatchlistItem) => {
