@@ -2,26 +2,39 @@ import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const symbol = searchParams.get('symbol') || 'NIFTY';
+  const symbol = searchParams.get('symbol') || 'RELIANCE';
   
-  const basePrice = symbol === 'NIFTY' ? 22500 : symbol === 'BANKNIFTY' ? 48000 : 22000;
-  const strikes = Array.from({ length: 15 }, (_, i) => basePrice + (i - 7) * 50);
-  
-  const buys = strikes.map(price => ({
-    price: price + Math.random() * 10,
-    quantity: Math.floor(Math.random() * 50000) + 5000
-  })).sort((a, b) => b.price - a.price);
-  
-  const sells = strikes.map(price => ({
-    price: price + Math.random() * 10,
-    quantity: Math.floor(Math.random() * 50000) + 5000
-  })).sort((a, b) => a.price - b.price);
-
-  return NextResponse.json({
-    symbol,
-    buys: buys.slice(0, 10),
-    sells: sells.slice(0, 10),
-    totalVolume: Math.floor(Math.random() * 10000000),
-    trades: Math.floor(Math.random() * 50000)
-  });
+  try {
+    // Get detailed quote with level 2 data from Yahoo
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/${symbol}?fields=shortName,longName,regularMarketPrice,regularMarketDayHigh,regularMarketDayLow,regularMarketVolume,averageDailyVolume,marketCap,peRatio,priceToBook,regularMarketChange,regularMarketChangePercent`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' } }
+    );
+    
+    if (!res.ok) throw new Error('Yahoo failed');
+    
+    const data = await res.json();
+    const quote = data?.quoteResponse?.result?.[0];
+    
+    if (!quote) throw new Error('No quote data');
+    
+    return NextResponse.json({
+      symbol: quote.symbol || symbol,
+      name: quote.shortName || quote.longName || symbol,
+      ltp: quote.regularMarketPrice || 0,
+      change: quote.regularMarketChange || 0,
+      percentChange: quote.regularMarketChangePercent || 0,
+      open: quote.regularMarketPrice - (quote.regularMarketChange || 0),
+      high: quote.regularMarketDayHigh || 0,
+      low: quote.regularMarketDayLow || 0,
+      volume: quote.regularMarketVolume || 0,
+      avgVolume: quote.averageDailyVolume || 0,
+      marketCap: quote.marketCap || 0,
+      pe: quote.peRatio || 0,
+      pb: quote.priceToBook || 0
+    });
+  } catch (e) {
+    console.error('Depth fetch error:', e);
+    return NextResponse.json({ error: true }, { status: 503 });
+  }
 }

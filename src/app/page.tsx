@@ -931,10 +931,10 @@ export default function App() {
                   </span>
                   <div className="space-y-1">
                     {screenerSignals.slice(0, 4).map((sig: any, i: number) => (
-                      <div key={sig.symbol + i} className="flex items-center justify-between text-[9px]">
-                        <span className="font-black text-zinc-200">{sig.symbol}</span>
-                        <span className="text-zinc-400">{sig.type}</span>
-                        <Mono className={sig.percentChange >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                      <div key={sig.symbol + i} className="flex items-center justify-between text-[9px] gap-2">
+                        <span className="font-black text-zinc-200 w-16 truncate">{sig.symbol}</span>
+                        <span className="text-zinc-500 text-[8px] w-20 truncate">{sig.type}</span>
+                        <Mono className={`text-right ${sig.percentChange >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'} w-12`}>
                           {sig.percentChange >= 0 ? '+' : ''}{sig.percentChange.toFixed(1)}%
                         </Mono>
                       </div>
