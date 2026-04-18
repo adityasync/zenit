@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { formatNumber } from '@/lib/utils';
 import StockHeatmap from '@/components/StockHeatmap';
 import RealCandlestickChart from '@/components/CandlestickChart';
 import { 
@@ -33,7 +34,12 @@ import {
   Minus,
   Bell,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Users,
+  Gauge,
+  BarChart2,
+  Building2,
+  Landmark
 } from 'lucide-react';
 import { StartupLoading } from "@/components/startup-loading";
 import { motion, AnimatePresence } from 'framer-motion';
@@ -98,7 +104,7 @@ const CandlestickChart = ({ height = 180, data = [] }: { height?: number; data?:
           return (
             <g key={p}>
               <line x1="0" y1={y} x2="100%" y2={y} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
-              <text x="4" y={y - 4} className="text-[8px] fill-zinc-700 font-mono">{formatNumber(price)}</text>
+              <text x="4" y={y - 4} className="text-[8px] fill-zinc-700 font-mono">{price.toLocaleString()}</text>
             </g>
           );
         })}
@@ -611,7 +617,22 @@ export default function App() {
           )}
 
           <div className="flex-1 overflow-y-auto no-scrollbar space-y-1">
-            {watchlist.length === 0 && !searchQuery ? (
+            {loading ? (
+              <div className="space-y-2">
+                {[1, 2, 3, 4, 5].map(i => (
+                  <div key={i} className="flex items-center justify-between p-2.5 rounded-lg">
+                    <div>
+                      <div className="h-3 w-12 bg-zinc-800/50 animate-pulse rounded mb-1" />
+                      <div className="h-2 w-20 bg-zinc-800/30 animate-pulse rounded" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="h-4 w-14 bg-zinc-800/50 animate-pulse rounded" />
+                      <div className="h-3 w-10 bg-zinc-800/30 animate-pulse rounded" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : watchlist.length === 0 && !searchQuery ? (
               <div className="text-center py-8">
                 <Star size={24} className="mx-auto mb-2 text-zinc-700" />
                 <p className="text-[11px] text-zinc-600">Your watchlist is empty</p>
@@ -722,6 +743,16 @@ export default function App() {
           
           <div className="col-span-3 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col justify-between">
             <WidgetHeader title="Breadth Gauge" icon={BarChart3} onExpand={() => setExpandedSection('Breadth Gauge')} />
+            {loading ? (
+              <div className="flex-1 flex flex-col justify-center gap-4 px-2">
+                <div className="flex justify-between">
+                  <div className="h-8 w-16 bg-zinc-800/50 animate-pulse rounded" />
+                  <div className="h-8 w-16 bg-zinc-800/50 animate-pulse rounded" />
+                </div>
+                <div className="h-3 w-full bg-zinc-800/30 animate-pulse rounded" />
+                <div className="h-3 w-20 mx-auto bg-zinc-800/30 animate-pulse rounded" />
+              </div>
+            ) : (
             <div className="flex-1 flex flex-col justify-center gap-4 px-2">
                <div className="flex justify-between items-end">
                   <div className="flex flex-col">
@@ -743,6 +774,7 @@ export default function App() {
                  </span>
                </div>
             </div>
+            )}
           </div>
         </section>
 
@@ -1013,34 +1045,152 @@ export default function App() {
                   </div>
                 )}
 
-                {expandedSection === 'Intelligence Hub' && (
-                  <div className="h-full max-w-3xl mx-auto flex flex-col gap-6">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="p-4 bg-zinc-900/60 border border-white/5 rounded-xl flex flex-col gap-2">
-                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-1"><Flame size={12} className="text-amber-500" /> Sentiment</span>
-                        <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 50}%` }} /></div>
-                        <Mono className="text-2xl font-black text-emerald-400">{sentiment?.label || 'NEUTRAL'} <span className="text-sm text-zinc-500">({sentiment?.score || 50})</span></Mono>
+{expandedSection === 'Intelligence Hub' && (
+                  <div className="h-full max-w-5xl mx-auto flex flex-col gap-4">
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="p-3 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[9px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><TrendingUp size={10} /> GIFT Nifty</span>
+                        <Mono className="text-xl text-white">-{/* pre-market gap would show here */ '0.0%'}</Mono>
+                        <div className="text-[10px] text-zinc-600">Pre-market direction</div>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        {[{ l: 'FII Flow', v: institutionalData?.fii?.net, icon: '🌍' }, { l: 'DII Flow', v: institutionalData?.dii?.net, icon: '🏦' }].map(f => (
-                          <div key={f.l} className="p-4 bg-zinc-900/60 border border-white/5 rounded-xl">
-                            <span className="text-[10px] font-black text-zinc-500 uppercase block mb-2">{f.icon} {f.l}</span>
-                            <Mono className={`text-xl font-bold ${f.v == null || f.v >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{f.v != null ? (f.v >= 0 ? '+' : '') + f.v : '---'} <span className="text-xs text-zinc-600">Cr</span></Mono>
-                          </div>
-                        ))}
+                      <div className="p-3 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[9px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Activity size={10} /> India VIX</span>
+                        <Mono className="text-xl text-amber-400">{'--'}</Mono>
+                        <div className="text-[10px] text-zinc-600">Volatility regime</div>
+                      </div>
+                      <div className="p-3 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
+                        <span className="text-[9px] font-black text-emerald-400 uppercase block mb-1">Market Status</span>
+                        <Mono className="text-xl text-emerald-400">{sentiment?.label || 'NEUTRAL'}</Mono>
+                        <div className="text-[10px] text-zinc-500">{sentiment?.score || 50}/100 score</div>
+                      </div>
+                      <div className="p-3 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[9px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Cpu size={10} /> PCR</span>
+                        <Mono className="text-xl text-white">{optionsChain?.pcr || '--'}</Mono>
+                        <div className="text-[10px] text-zinc-600">NIFTY PCR</div>
                       </div>
                     </div>
-                    <div className="space-y-3 flex-1 overflow-y-auto no-scrollbar">
-                      {newsData.map((n: any, i: number) => (
-                        <a key={i} href={n.link || '#'} target="_blank" rel="noopener noreferrer"
-                          className="flex gap-4 p-4 rounded-xl bg-zinc-900/50 hover:bg-white/5 border border-white/5 hover:border-amber-500/30 transition-all group cursor-pointer">
-                          <div className="flex-1">
-                            <div className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-1">{n.source}</div>
-                            <p className="text-sm text-zinc-300 group-hover:text-white transition-colors leading-relaxed">{n.title}</p>
+                    
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="col-span-2 p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <Users size={12} className="text-emerald-500" /> Institutional Flows (₹Cr)
+                        </span>
+                        <div className="grid grid-cols-5 gap-3">
+                          <div className="col-span-2 p-3 bg-zinc-950 rounded-lg">
+                            <div className="text-xs text-zinc-500 uppercase mb-2">🐻 FII (Today)</div>
+                            <Mono className={`text-2xl font-bold ${(institutionalData?.fii?.net || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{(institutionalData?.fii?.net || 0) >= 0 ? '+' : ''}{institutionalData?.fii?.net || 0}</Mono>
+                            <div className="text-[10px] text-zinc-600 mt-1">Buy: {institutionalData?.fii?.buyValue || 0} / Sell: {institutionalData?.fii?.sellValue || 0}</div>
                           </div>
-                          <span className="text-[10px] text-zinc-600 shrink-0 mt-1">{n.timestamp ? new Date(n.timestamp).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'}) : 'Now'}</span>
-                        </a>
-                      ))}
+                          <div className="col-span-2 p-3 bg-zinc-950 rounded-lg">
+                            <div className="text-xs text-zinc-500 uppercase mb-2">🐂 DII (Today)</div>
+                            <Mono className={`text-2xl font-bold ${(institutionalData?.dii?.net || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{(institutionalData?.dii?.net || 0) >= 0 ? '+' : ''}{institutionalData?.dii?.net || 0}</Mono>
+                            <div className="text-[10px] text-zinc-600 mt-1">Buy: {institutionalData?.dii?.buyValue || 0} / Sell: {institutionalData?.dii?.sellValue || 0}</div>
+                          </div>
+                          <div className="p-3 bg-zinc-950 rounded-lg">
+                            <div className="text-xs text-zinc-500 uppercase mb-2">Net Diff</div>
+                            <Mono className={`text-xl font-bold ${((institutionalData?.dii?.net || 0) + (institutionalData?.fii?.net || 0)) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{((institutionalData?.dii?.net || 0) + (institutionalData?.fii?.net || 0)).toFixed(0)}</Mono>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 mt-3">
+                          {[{l:'FII Index',v:institutionalData?.fii?.index},{l:'FII Cash',v:institutionalData?.fii?.cash},{l:'FII F&O',v:institutionalData?.fii?.fn}].map(item => (
+                            <div key={item.l} className="text-center p-2 bg-zinc-950/50 rounded">
+                              <div className="text-[9px] text-zinc-600 uppercase">{item.l}</div>
+                              <Mono className={`text-sm ${(item.v || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{(item.v || 0) >= 0 ? '+' : ''}{item.v || 0}</Mono>
+                            </div>
+                          ))}
+                          {[{l:'DII Index',v:institutionalData?.dii?.index},{l:'DII Cash',v:institutionalData?.dii?.cash},{l:'DII F&O',v:institutionalData?.dii?.fn}].map(item => (
+                            <div key={item.l} className="text-center p-2 bg-zinc-950/50 rounded">
+                              <div className="text-[9px] text-zinc-600 uppercase">{item.l}</div>
+                              <Mono className={`text-sm ${(item.v || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{(item.v || 0) >= 0 ? '+' : ''}{item.v || 0}</Mono>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div className="p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <Layers size={12} className="text-amber-500" /> Key Levels (NIFTY)
+                        </span>
+                        <div className="space-y-2">
+                          <div className="flex justify-between p-2 bg-emerald-950/30 rounded border border-emerald-500/30">
+                            <span className="text-xs text-zinc-400">Support</span>
+                            <Mono className="text-sm text-emerald-400">{'--'}</Mono>
+                          </div>
+                          <div className="flex justify-between p-2 bg-amber-950/30 rounded border border-amber-500/30">
+                            <span className="text-xs text-zinc-400">Pivot</span>
+                            <Mono className="text-sm text-amber-400">{'--'}</Mono>
+                          </div>
+                          <div className="flex justify-between p-2 bg-rose-950/30 rounded border border-rose-500/30">
+                            <span className="text-xs text-zinc-400">Resistance</span>
+                            <Mono className="text-sm text-rose-400">{'--'}</Mono>
+                          </div>
+                          <div className="flex justify-between p-2 bg-zinc-950 rounded mt-2 border border-white/5">
+                            <span className="text-xs text-zinc-500">Max Pain</span>
+                            <Mono className="text-sm text-white">{optionsChain?.maxPain || '--'}</Mono>
+                          </div>
+                          <div className="flex justify-between p-2 bg-zinc-950 rounded border border-white/5">
+                            <span className="text-xs text-zinc-500">Max OI Strike</span>
+                            <Mono className="text-sm text-white">{'--'}</Mono>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <TrendingUp size={12} className="text-amber-500" /> Weekly Flow (7 Days)
+                        </span>
+                        <div className="flex items-end gap-1 h-20">
+                          {(institutionalData?.weekHistory || []).length > 0 ? (institutionalData?.weekHistory || []).slice(0, 7).map((d: any, i: number) => {
+                            const max = Math.max(...(institutionalData?.weekHistory || [{fii:100,dii:100}]).map((x: any) => Math.abs(x.fii + x.dii)));
+                            const h = max > 0 ? ((d.fii + d.dii) / max) * 100 : 0;
+                            const color = (d.fii + d.dii) >= 0 ? 'bg-emerald-500' : 'bg-rose-500';
+                            return (
+                              <div key={i} className="flex-1 flex flex-col items-center">
+                                <div className={`w-full ${color} rounded-t`} style={{ height: `${Math.abs(h)}%`, minHeight: h !== 0 ? '4px' : 0 }} />
+                                <span className="text-[8px] text-zinc-600 mt-1">{d.day}</span>
+                              </div>
+                            );
+                          }) : (
+                            <div className="text-zinc-600 text-xs w-full text-center py-6">No weekly data</div>
+                          )}
+                        </div>
+                        <div className="flex justify-between text-[9px] text-zinc-600 mt-2">
+                          <span>7 days ago</span>
+                          <span>Today</span>
+                        </div>
+                      </div>
+                      
+                      <div className="p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <BarChart3 size={12} className="text-amber-500" /> Sector Flow
+                        </span>
+                        <div className="space-y-1.5 max-h-24 overflow-auto">
+                          {sectors.slice(0, 8).map((s: any, i: number) => (
+                            <div key={s.name + i} className="flex justify-between items-center text-xs p-2 bg-zinc-950 rounded">
+                              <span className="text-zinc-400">{s.name}</span>
+                              <Mono className={s.percentChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{s.percentChange > 0 ? '+' : ''}{s.percentChange?.toFixed(1)}%</Mono>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
+                      <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                        <Newspaper size={12} className="text-amber-500" /> Market Buzz
+                      </span>
+                      <div className="grid grid-cols-3 gap-2">
+                        {newsData.slice(0, 6).map((n: any, i: number) => (
+                          <a key={i} href={n.link || '#'} target="_blank" rel="noopener noreferrer"
+                            className="p-2.5 rounded-lg bg-zinc-950 hover:bg-white/5 border border-white/5 hover:border-amber-500/30 transition-all cursor-pointer">
+                            <div className="text-[9px] text-amber-500 uppercase font-bold mb-1">{n.source}</div>
+                            <p className="text-xs text-zinc-300 line-clamp-2 leading-relaxed">{n.title}</p>
+                            <span className="text-[8px] text-zinc-600 mt-1.5 block">{n.timestamp ? new Date(n.timestamp).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'}) : 'Now'}</span>
+                          </a>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
