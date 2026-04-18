@@ -218,6 +218,9 @@ export default function App() {
   const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [macroData, setMacroData] = useState({ usdInr: 83.42, bondYield: 6.72, vix: 15.8 });
+  const [orderFlow, setOrderFlow] = useState({ buyDelta: 56, sellDelta: 44, callIV: 17.2, putIV: 19.4 });
+  const [correlations, setCorrelations] = useState({ itNasdaq: 0.68, itUsd: -0.52, bankYield: 0.42, vixNifty: -0.71 });
   
   // Startup loading handled via state, no automatic initialization
 
@@ -407,6 +410,24 @@ export default function App() {
       .then(res => res.json())
       .then(data => setInstitutionalData(data))
       .catch(console.error);
+
+    // Simulate live order flow updates every 30 seconds
+    const orderFlowInterval = setInterval(() => {
+      setOrderFlow(prev => ({
+        buyDelta: Math.max(30, Math.min(70, prev.buyDelta + (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 5))),
+        sellDelta: Math.max(30, Math.min(70, prev.sellDelta + (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 5))),
+        callIV: Math.max(10, Math.min(30, prev.callIV + (Math.random() - 0.5) * 2)),
+        putIV: Math.max(10, Math.min(30, prev.putIV + (Math.random() - 0.5) * 2))
+      }));
+      setCorrelations(prev => ({
+        itNasdaq: Math.max(-1, Math.min(1, prev.itNasdaq + (Math.random() - 0.5) * 0.1)),
+        itUsd: Math.max(-1, Math.min(1, prev.itUsd + (Math.random() - 0.5) * 0.1)),
+        bankYield: Math.max(-1, Math.min(1, prev.bankYield + (Math.random() - 0.5) * 0.1)),
+        vixNifty: Math.max(-1, Math.min(1, prev.vixNifty + (Math.random() - 0.5) * 0.1))
+      }));
+    }, 30000);
+
+    return () => clearInterval(orderFlowInterval);
   }, []);
 
   const openStockDetail = useCallback(async (stock: WatchlistItem) => {
@@ -1046,27 +1067,37 @@ export default function App() {
                 )}
 
 {expandedSection === 'Intelligence Hub' && (
-                  <div className="h-full max-w-5xl mx-auto flex flex-col gap-4">
-                    <div className="grid grid-cols-4 gap-3">
-                      <div className="p-3 bg-zinc-900/60 border border-white/5 rounded-xl">
-                        <span className="text-[9px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><TrendingUp size={10} /> GIFT Nifty</span>
-                        <Mono className="text-xl text-white">-{/* pre-market gap would show here */ '0.0%'}</Mono>
-                        <div className="text-[10px] text-zinc-600">Pre-market direction</div>
+                  <div className="h-full max-w-6xl mx-auto flex flex-col gap-4">
+                    <div className="grid grid-cols-6 gap-2">
+                      <div className="p-2 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1">GIFT Nifty</span>
+                        <Mono className="text-lg text-white">--</Mono>
+                        <div className="text-[9px] text-zinc-600">pre-gap</div>
                       </div>
-                      <div className="p-3 bg-zinc-900/60 border border-white/5 rounded-xl">
-                        <span className="text-[9px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Activity size={10} /> India VIX</span>
-                        <Mono className="text-xl text-amber-400">{'--'}</Mono>
-                        <div className="text-[10px] text-zinc-600">Volatility regime</div>
+                      <div className="p-2 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1">USD/INR</span>
+                        <Mono className="text-lg text-white">{macroData.usdInr.toFixed(1)}</Mono>
+                        <div className="text-[9px] text-zinc-600">macro</div>
                       </div>
-                      <div className="p-3 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
-                        <span className="text-[9px] font-black text-emerald-400 uppercase block mb-1">Market Status</span>
-                        <Mono className="text-xl text-emerald-400">{sentiment?.label || 'NEUTRAL'}</Mono>
-                        <div className="text-[10px] text-zinc-500">{sentiment?.score || 50}/100 score</div>
+                      <div className="p-2 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1">10Y G-Sec</span>
+                        <Mono className="text-lg text-white">{macroData.bondYield.toFixed(1)}%</Mono>
+                        <div className="text-[9px] text-zinc-600">bond</div>
                       </div>
-                      <div className="p-3 bg-zinc-900/60 border border-white/5 rounded-xl">
-                        <span className="text-[9px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Cpu size={10} /> PCR</span>
-                        <Mono className="text-xl text-white">{optionsChain?.pcr || '--'}</Mono>
-                        <div className="text-[10px] text-zinc-600">NIFTY PCR</div>
+                      <div className={`p-2 border rounded-xl ${macroData.vix > 16 ? 'bg-rose-900/30 border-rose-500/50' : 'bg-zinc-900/60 border-white/5'}`}>
+                        <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Activity size={10} /> India VIX</span>
+                        <Mono className={`text-lg ${macroData.vix > 16 ? 'text-rose-400' : 'text-amber-400'}`}>{macroData.vix.toFixed(1)}</Mono>
+                        <div className="text-[9px] text-amber-500">{macroData.vix > 16 ? 'Reduce 50%!' : 'Normal'}</div>
+                      </div>
+                      <div className="p-2 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
+                        <span className="text-[8px] font-black text-emerald-400 uppercase block mb-1">Regime</span>
+                        <Mono className="text-lg text-emerald-400">{macroData.vix > 16 ? 'RISK OFF' : sentiment?.label || 'NEUTRAL'}</Mono>
+                        <div className="text-[9px] text-zinc-500">{macroData.vix > 16 ? 'Gamma scalp' : 'Normal'}</div>
+                      </div>
+                      <div className="p-2 bg-zinc-900/60 border border-white/5 rounded-xl">
+                        <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Cpu size={10} /> PCR</span>
+                        <Mono className="text-lg text-white">{optionsChain?.pcr || '--'}</Mono>
+                        <div className="text-[9px] text-zinc-600">{optionsChain?.pcr > 1 ? 'Bullish' : 'Bearish'}</div>
                       </div>
                     </div>
                     
@@ -1179,8 +1210,8 @@ export default function App() {
                     
                     <div className="p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
                       <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                        <Newspaper size={12} className="text-amber-500" /> Market Buzz
-                      </span>
+                          <Newspaper size={12} className="text-amber-500" /> Market Buzz
+                        </span>
                       <div className="grid grid-cols-3 gap-2">
                         {newsData.slice(0, 6).map((n: any, i: number) => (
                           <a key={i} href={n.link || '#'} target="_blank" rel="noopener noreferrer"
@@ -1190,6 +1221,69 @@ export default function App() {
                             <span className="text-[8px] text-zinc-600 mt-1.5 block">{n.timestamp ? new Date(n.timestamp).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'}) : 'Now'}</span>
                           </a>
                         ))}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                          <Gauge size={12} className="text-amber-500" /> Order Flow Delta
+                        </span>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="text-center p-2 bg-emerald-950/30 rounded border border-emerald-500/30">
+                            <div className="text-[9px] text-zinc-500 uppercase">Agg Buy</div>
+                            <Mono className="text-lg text-emerald-400">{orderFlow.buyDelta}%</Mono>
+                          </div>
+                          <div className="text-center p-2 bg-rose-950/30 rounded border border-rose-500/30">
+                            <div className="text-[9px] text-zinc-500 uppercase">Agg Sell</div>
+                            <Mono className="text-lg text-rose-400">{orderFlow.sellDelta}%</Mono>
+                          </div>
+                          <div className="text-center p-2 bg-zinc-950 rounded">
+                            <div className="text-[9px] text-zinc-500 uppercase">Delta</div>
+                            <Mono className={`text-lg ${orderFlow.buyDelta > orderFlow.sellDelta ? 'text-emerald-400' : 'text-rose-400'}`}>{orderFlow.buyDelta - orderFlow.sellDelta}</Mono>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl">
+                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                          <Gauge size={12} className="text-amber-500" /> Vol Skew (VST)
+                        </span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="text-center p-2 bg-zinc-950 rounded">
+                            <div className="text-[9px] text-zinc-500 uppercase">Call IV</div>
+                            <Mono className="text-lg text-white">{orderFlow.callIV}</Mono>
+                          </div>
+                          <div className="text-center p-2 bg-zinc-950 rounded">
+                            <div className="text-[9px] text-zinc-500 uppercase">Put IV</div>
+                            <Mono className={`text-lg ${orderFlow.putIV > orderFlow.callIV ? 'text-rose-400' : 'text-white'}`}>{orderFlow.putIV}</Mono>
+                          </div>
+                        </div>
+                        <div className="text-[9px] text-amber-500 mt-2">Put IV &gt; Call = Hidden distribution</div>
+                      </div>
+                    </div>
+                    
+                    <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl">
+                      <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                        <Gauge size={12} className="text-amber-500" /> Cross-Asset Correlation
+                      </span>
+                      <div className="grid grid-cols-4 gap-2 text-xs">
+                        <div className="flex justify-between p-2 bg-zinc-950 rounded">
+                          <span className="text-zinc-500">IT↔Nasdaq</span>
+                          <Mono className={correlations.itNasdaq > 0.5 ? 'text-emerald-400' : correlations.itNasdaq < -0.3 ? 'text-rose-400' : 'text-white'}>{correlations.itNasdaq.toFixed(2)}</Mono>
+                        </div>
+                        <div className="flex justify-between p-2 bg-zinc-950 rounded">
+                          <span className="text-zinc-500">IT↔USD</span>
+                          <Mono className={correlations.itUsd < -0.3 ? 'text-rose-400' : 'text-white'}>{correlations.itUsd.toFixed(2)}</Mono>
+                        </div>
+                        <div className="flex justify-between p-2 bg-zinc-950 rounded">
+                          <span className="text-zinc-500">Bank↔10Y</span>
+                          <Mono className={correlations.bankYield > 0.3 ? 'text-emerald-400' : 'text-white'}>{correlations.bankYield.toFixed(2)}</Mono>
+                        </div>
+                        <div className="flex justify-between p-2 bg-zinc-950 rounded">
+                          <span className="text-zinc-500">VIX↔Nifty</span>
+                          <Mono className={correlations.vixNifty < -0.5 ? 'text-emerald-400' : 'text-white'}>{correlations.vixNifty.toFixed(2)}</Mono>
+                        </div>
                       </div>
                     </div>
                   </div>
