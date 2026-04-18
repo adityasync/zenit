@@ -19,6 +19,7 @@ export interface StockQuote {
   percentChange: number;
   deliveryPercent?: number;
   timestamp: number;
+  isDelayed?: boolean;
 }
 
 export interface MarketBreadth {

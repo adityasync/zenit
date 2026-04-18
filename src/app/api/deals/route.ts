@@ -46,39 +46,6 @@ async function fetchNSE<T>(endpoint: string): Promise<T | null> {
   }
 }
 
-// Fallback mock deals
-function generateMockDeals(type: string) {
-  const symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "SBIN", "TATAMOTORS", "ITC", "WIPRO", "ADANIENT", "HAL"];
-  const clients = [
-    "Goldman Sachs Fund", "Morgan Stanley Asia", "HDFC Mutual Fund", "SBI Mutual Fund",
-    "Kotak Mahindra MF", "ICICI Prudential MF", "Axis Capital", "Citigroup Global",
-    "JP Morgan Chase", "Blackrock Inc"
-  ];
-  
-  const deals = [];
-  const count = 5 + Math.floor(Math.random() * 8);
-  
-  for (let i = 0; i < count; i++) {
-    const sym = symbols[Math.floor(Math.random() * symbols.length)];
-    const basePrice = sym === "RELIANCE" ? 2950 : sym === "TCS" ? 3850 : 1000 + Math.random() * 3000;
-    const qty = Math.floor(100000 + Math.random() * 2000000);
-    const price = parseFloat((basePrice * (0.99 + Math.random() * 0.02)).toFixed(2));
-    
-    deals.push({
-      symbol: sym,
-      name: sym,
-      client: clients[Math.floor(Math.random() * clients.length)],
-      type: Math.random() > 0.5 ? "BUY" : "SELL",
-      quantity: qty,
-      price,
-      value: parseFloat((qty * price).toFixed(2)),
-      date: new Date().toISOString().split("T")[0],
-    });
-  }
-  
-  return deals;
-}
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type") || "block";
@@ -120,11 +87,11 @@ export async function GET(request: Request) {
     });
   }
 
-  // Fallback to mock deals
+  // No live data available
   return NextResponse.json({
     type,
-    deals: generateMockDeals(type),
+    deals: [],
     timestamp: Date.now(),
-    source: "simulated",
-  });
+    error: "No live deal data available at this time",
+  }, { status: 404 });
 }

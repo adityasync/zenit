@@ -128,7 +128,7 @@ export async function GET(request: Request) {
   }>(`/api/option-chain-indices?symbol=${upperSymbol}`, true);
 
   if (!data?.records) {
-    return NextResponse.json(generateMockOptions(upperSymbol));
+    return NextResponse.json({ error: "Options data not available" }, { status: 404 });
   }
 
   const expiryDates = data.records.expiryDates || [];
@@ -139,7 +139,7 @@ export async function GET(request: Request) {
   ) || data.records.data?.[0];
 
   if (!optionsData?.options) {
-    return NextResponse.json(generateMockOptions(upperSymbol));
+    return NextResponse.json({ error: "Options data not available for expiry" }, { status: 404 });
   }
 
   const strikes: OptionStrike[] = optionsData.options
@@ -191,53 +191,4 @@ export async function GET(request: Request) {
   };
 
   return NextResponse.json(chain);
-}
-
-function generateMockOptions(symbol: string): OptionsChain {
-  const spotPrice = symbol === "NIFTY" ? 22450 : symbol === "BANKNIFTY" ? 48500 : 22450;
-  const atmStrike = Math.round(spotPrice / 50) * 50;
-  const strikes: OptionStrike[] = [];
-
-  for (let i = -10; i <= 10; i++) {
-    const strike = atmStrike + i * 50;
-    const distanceFromATM = Math.abs(i);
-    const baseOI = 50000 + (10 - distanceFromATM) * 15000;
-
-    strikes.push({
-      strike,
-      ce: {
-        oi: baseOI + Math.random() * 20000,
-        oiChange: (Math.random() - 0.3) * 5000,
-        volume: Math.floor(Math.random() * 50000),
-        iv: 15 + distanceFromATM * 1.5 + Math.random() * 3,
-        ltp: i < 0 ? Math.abs(i) * 4 + Math.random() * 3 : Math.max(0.5, 50 - distanceFromATM * 6 + Math.random() * 4),
-        bid: i < 0 ? Math.max(0, (Math.abs(i) * 4) * 0.95) : Math.max(0.1, 50 - distanceFromATM * 6) * 0.95,
-        ask: i < 0 ? Math.abs(i) * 4 + 0.5 : Math.max(0.5, 50 - distanceFromATM * 6) + 0.5,
-      },
-      pe: {
-        oi: baseOI + Math.random() * 20000,
-        oiChange: (Math.random() - 0.4) * 5000,
-        volume: Math.floor(Math.random() * 50000),
-        iv: 15 + distanceFromATM * 1.5 + Math.random() * 3,
-        ltp: i > 0 ? Math.abs(i) * 4 + Math.random() * 3 : Math.max(0.5, 50 - distanceFromATM * 6 + Math.random() * 4),
-        bid: i > 0 ? Math.max(0, (Math.abs(i) * 4) * 0.95) : Math.max(0.1, 50 - distanceFromATM * 6) * 0.95,
-        ask: i > 0 ? Math.abs(i) * 4 + 0.5 : Math.max(0.5, 50 - distanceFromATM * 6) + 0.5,
-      },
-    });
-  }
-
-  const totalCEOI = strikes.reduce((sum, s) => sum + s.ce.oi, 0);
-  const totalPEOI = strikes.reduce((sum, s) => sum + s.pe.oi, 0);
-
-  return {
-    symbol,
-    underlying: symbol,
-    spotPrice,
-    pcr: parseFloat((totalPEOI / totalCEOI).toFixed(2)),
-    maxPain: atmStrike,
-    expiry: "28 APR 2026",
-    expiryDates: ["28 APR 2026", "08 MAY 2026", "22 MAY 2026"],
-    strikes,
-    timestamp: Date.now(),
-  };
 }

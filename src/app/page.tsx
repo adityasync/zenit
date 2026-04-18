@@ -78,13 +78,16 @@ const CandlestickChart = ({ height = 180, data, activeSymbol }: { height?: numbe
         return { open, close, high: val * 1.01, low: open * 0.99 };
       });
     }
-    return Array.from({ length: 40 }, (_, i) => {
-      const base = 100 + Math.sin(i / 5) * 20;
-      const open = base + (Math.random() - 0.5) * 10;
-      const close = open + (Math.random() - 0.5) * 15;
-      return { open, close, high: Math.max(open, close) + 5, low: Math.min(open, close) - 5 };
-    });
+    return [];
   }, [data]);
+
+  if (!candles || candles.length === 0) {
+    return (
+      <div className="w-full bg-zinc-950/40 rounded border border-white/5 relative overflow-hidden flex items-center justify-center" style={{ height }}>
+        <span className="text-[10px] text-zinc-600 font-mono">No chart data available</span>
+      </div>
+    );
+  }
 
   const max = Math.max(...candles.map(c => c.high));
   const min = Math.min(...candles.map(c => c.low));
@@ -202,7 +205,7 @@ export default function App() {
 
   const fetchStockQuote = useCallback(async (symbol: string) => {
     try {
-      const res = await fetch(`/api/quote?symbol=${symbol}`);
+      const res = await fetch(`/api/quote?symbol=${symbol}&refresh=true`);
       if (res.ok) {
         return await res.json();
       }
@@ -346,24 +349,19 @@ export default function App() {
     }
   }, [activeOverlay, heatmapView]);
 
-  const FALLBACK_NEWS = [
-    { title: "SEBI issues new guidelines for FII investments", link: "#", source: "Markets" },
-    { title: "RBI retains repo rate, positive on inflation", link: "#", source: "Economy" },
-    { title: "FII flow turns positive amid global cues", link: "#", source: "Capital" },
-    { title: "Q3 earnings season begins with strong results", link: "#", source: "Results" },
-  ];
+
 
   useEffect(() => {
     fetch('/api/news')
       .then(res => res.json())
       .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setNewsData(data.slice(0, 7));
         } else {
-          setNewsData(FALLBACK_NEWS);
+          setNewsData([]);
         }
       })
-      .catch(() => setNewsData(FALLBACK_NEWS));
+      .catch(() => setNewsData([]));
 
     fetch('/api/sentiment')
       .then(res => res.json())
@@ -414,7 +412,7 @@ export default function App() {
     
     setCopilotResponse({ text: "", loading: true, sources: [] });
     
-    const context = `Current indices: ${indices.map(i => i.name + ': ' + i.value).join(', ')}. ${institutionalData ? 'Institutional Flows (in Crores): FII Net ' + institutionalData.fii.net + ', DII Net ' + institutionalData.dii.net + '.' : ''} Account Balance: ${balance}.`;
+    const context = `Current indices: ${indices.map(i => i.name + ': ' + i.value).join(', ')}. ${institutionalData?.fii ? 'Institutional Flows (in Crores): FII Net ' + (institutionalData.fii.net || 0) + ', DII Net ' + (institutionalData.dii.net || 0) + '.' : ''} Account Balance: ${balance}.`;
     const res = await callCopilotAPI(copilotQuery, context);
     setCopilotResponse({ text: res.text, loading: false, sources: res.sources || [] });
   }, [copilotQuery, indices, institutionalData, balance]);
@@ -477,21 +475,12 @@ export default function App() {
     setAlertInput({ symbol: '', price: '' });
   }, [alertInput, positions, watchlist]);
 
-  const totalAdvances = breadth?.advances || 1482;
-  const totalDeclines = breadth?.declines || 512;
-  const totalStocks = totalAdvances + totalDeclines + (breadth?.unchanged || 42);
-  const advancePercent = totalStocks > 0 ? (totalAdvances / totalStocks) * 100 : 74;
+  const totalAdvances = breadth?.advances || 0;
+  const totalDeclines = breadth?.declines || 0;
+  const totalStocks = totalAdvances + totalDeclines + (breadth?.unchanged || 0);
+  const advancePercent = totalStocks > 0 ? (totalAdvances / totalStocks) * 100 : 0;
 
-  const displaySectors = sectors.length > 0 ? sectors : [
-    { name: 'NIFTY BANK', symbol: 'BFSI', value: 45234, percentChange: 0.85 },
-    { name: 'NIFTY IT', symbol: 'IT', value: 38145, percentChange: -1.2 },
-    { name: 'NIFTY AUTO', symbol: 'AUTO', value: 23856, percentChange: 2.1 },
-    { name: 'NIFTY FMCG', symbol: 'FMCG', value: 52134, percentChange: -0.4 },
-    { name: 'NIFTY METAL', symbol: 'METAL', value: 8456, percentChange: 3.2 },
-    { name: 'NIFTY PHARMA', symbol: 'PHARMA', value: 17892, percentChange: 0.2 },
-    { name: 'NIFTY REALTY', symbol: 'REALTY', value: 756, percentChange: 1.5 },
-    { name: 'NIFTY ENERGY', symbol: 'ENERGY', value: 28145, percentChange: -1.8 },
-  ];
+  const displaySectors = sectors;
 
   return (
     <div className="fixed inset-0 bg-zinc-950 text-zinc-300 select-none overflow-hidden font-sans flex flex-col h-screen">
@@ -502,12 +491,7 @@ export default function App() {
               <img src="/icons/logo.png" alt="ZENIT Logo" className="w-7 h-7 object-contain group-hover:scale-110 transition-transform" />
             </div>
             <div className="h-10 w-[1px] bg-white/10 mx-2" />
-            {(indices.length > 0 ? indices : [
-              { name: 'NIFTY 50', value: 22453.20, percentChange: 0.45 },
-              { name: 'BANKNIFTY', value: 48120.50, percentChange: -0.25 },
-              { name: 'NIFTY IT', value: 35640.10, percentChange: 1.28 },
-              { name: 'SENSEX', value: 73920.40, percentChange: 0.32 },
-            ]).map((idx: any, i: number) => (
+            {indices.map((idx: any, i: number) => (
               <div key={idx.name + i} className="flex flex-col min-w-max px-3 border-r border-white/5 last:border-none">
                 <span className="text-[9px] text-zinc-500 font-black uppercase tracking-[0.2em]">{idx.name}</span>
                 <div className="flex items-center gap-2">
@@ -538,8 +522,8 @@ export default function App() {
         </header>
       </div>
 
-      <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 grid grid-cols-12 grid-rows-[repeat(11,minmax(0,1fr))] gap-2 lg:gap-3 overflow-hidden pt-1 lg:pt-2">
-        <section className="col-span-12 lg:col-span-3 row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col overflow-hidden">
+      <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 flex flex-col lg:grid lg:grid-cols-12 lg:grid-rows-[repeat(11,minmax(0,1fr))] gap-2 lg:gap-3 overflow-y-auto lg:overflow-hidden pt-1 lg:pt-2 mb-16 lg:mb-0">
+        <section className={`lg:col-span-3 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden ${mobileTab === 'watchlist' ? 'flex min-h-[500px]' : 'hidden lg:flex'}`}>
           <WidgetHeader title="Terminal Monitor" icon={Activity} onExpand={() => setExpandedSection('Watchlist')} />
           <div className="relative mb-3">
              <SearchIcon size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
@@ -652,7 +636,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="hidden lg:flex col-span-9 row-span-4 gap-3">
+        <section className={`lg:col-span-9 lg:row-span-4 gap-3 ${mobileTab === 'indices' ? 'flex flex-col lg:flex-row' : 'hidden lg:flex lg:flex-row'}`}>
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center justify-between w-full">
@@ -719,7 +703,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="hidden lg:flex col-span-4 row-span-4 gap-2">
+        <section className={`lg:col-span-4 lg:row-span-4 gap-2 ${mobileTab === 'scanner' ? 'flex flex-col min-h-[400px] lg:min-h-0' : 'hidden lg:flex'}`}>
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -774,7 +758,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="hidden lg:flex col-span-5 row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col">
+        <section className={`lg:col-span-5 lg:row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col ${mobileTab === 'news' ? 'flex min-h-[500px]' : 'hidden lg:flex'}`}>
            <WidgetHeader title="Intelligence Hub" icon={Globe} onExpand={() => setExpandedSection('Intelligence Hub')} />
            <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pr-1">
               <div className="p-3 bg-zinc-950/40 border border-white/5 rounded-lg flex flex-col gap-2">
@@ -782,12 +766,12 @@ export default function App() {
                     <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest italic flex items-center gap-1">
                       <Flame size={10} className="text-amber-500" /> Sentiment
                     </span>
-                    <Mono className="text-[10px] font-bold text-emerald-500">
-                      {sentiment?.label || 'GREED'} ({sentiment?.score || 68})
+                    <Mono className="text-zinc-500 font-bold">
+                      {sentiment ? `${sentiment.label} (${sentiment.score})` : 'NEUTRAL (50)'}
                     </Mono>
                  </div>
                  <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden border border-white/5">
-                    <div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 68}%` }} />
+                    <div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 50}%` }} />
                  </div>
                  <div className="text-[8px] text-zinc-600 italic tracking-tighter">Market sentiment reflects aggressive buying.</div>
               </div>
@@ -799,8 +783,8 @@ export default function App() {
                     <Globe size={8} /> FII Flow
                   </span>
                   <div className="mt-1 flex items-end justify-between">
-                    <Mono className={`text-sm font-bold ${institutionalData && institutionalData.fii.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                      {institutionalData ? `${institutionalData.fii.net >= 0 ? '+' : ''}${institutionalData.fii.net}` : '---'}
+                    <Mono className={`text-sm font-bold ${institutionalData?.fii?.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {institutionalData?.fii ? `${institutionalData.fii.net >= 0 ? '+' : ''}${institutionalData.fii.net}` : '---'}
                     </Mono>
                     <span className="text-[7px] text-zinc-600 font-bold uppercase tracking-widest mb-1.5">Cr</span>
                   </div>
@@ -810,8 +794,8 @@ export default function App() {
                     <Layers size={8} /> DII Flow
                   </span>
                   <div className="mt-1 flex items-end justify-between">
-                    <Mono className={`text-sm font-bold ${institutionalData && institutionalData.dii.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                      {institutionalData ? `${institutionalData.dii.net >= 0 ? '+' : ''}${institutionalData.dii.net}` : '---'}
+                    <Mono className={`text-sm font-bold ${institutionalData?.dii?.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {institutionalData?.dii ? `${institutionalData.dii.net >= 0 ? '+' : ''}${institutionalData.dii.net}` : '---'}
                     </Mono>
                     <span className="text-[7px] text-zinc-600 font-bold uppercase tracking-widest mb-1.5">Cr</span>
                   </div>
@@ -897,15 +881,11 @@ export default function App() {
            </button>
         </section>
 
-        <section className="hidden lg:flex col-span-4 row-span-3 gap-2">
+        <section className={`lg:col-span-4 lg:row-span-3 gap-2 ${mobileTab === 'indices' || mobileTab === 'scanner' ? 'flex flex-col lg:flex-row' : 'hidden lg:flex lg:flex-row'}`}>
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden flex flex-col">
              <WidgetHeader title="Top Movers" icon={Target} extra={<select className="bg-zinc-950 text-[8px] text-zinc-500 border border-white/10 rounded px-1"><option>Gainers</option></select>} onExpand={() => setExpandedSection('Top Movers')} />
              <div className="space-y-1.5 mt-1 overflow-y-auto no-scrollbar">
-                {(gainers.length > 0 ? gainers.slice(0, 5) : [
-                  { symbol: 'COALINDIA', percentChange: 3.4, volume: 2800000 },
-                  { symbol: 'HAL', percentChange: 1.2, volume: 2100000 },
-                  { symbol: 'ZOMATO', percentChange: 4.5, volume: 45000000 }
-                ]).map((item: any, i: number) => (
+                {gainers && gainers.length > 0 ? gainers.slice(0, 5).map((item: any, i: number) => (
                   <div key={item.symbol + i} className="flex items-center justify-between p-1.5 bg-zinc-950/50 rounded border border-white/5 hover:border-amber-500/30 cursor-pointer">
                      <span className="text-[10px] font-black text-zinc-200">{item.symbol}</span>
                      <div className="flex items-center gap-2">
@@ -917,7 +897,9 @@ export default function App() {
                         </div>
                      </div>
                   </div>
-                ))}
+                )) : (
+                  <div className="text-center py-4 text-zinc-600 text-[10px]">No gainer data available</div>
+                )}
              </div>
           </div>
           <div className="w-32 bg-zinc-900/20 border border-white/5 rounded-xl p-2 flex flex-col justify-center">
@@ -993,8 +975,8 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="p-4 bg-zinc-900/60 border border-white/5 rounded-xl flex flex-col gap-2">
                         <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-1"><Flame size={12} className="text-amber-500" /> Sentiment</span>
-                        <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 68}%` }} /></div>
-                        <Mono className="text-2xl font-black text-emerald-400">{sentiment?.label || 'GREED'} <span className="text-sm text-zinc-500">({sentiment?.score || 68})</span></Mono>
+                        <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 50}%` }} /></div>
+                        <Mono className="text-2xl font-black text-emerald-400">{sentiment?.label || 'NEUTRAL'} <span className="text-sm text-zinc-500">({sentiment?.score || 50})</span></Mono>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         {[{ l: 'FII Flow', v: institutionalData?.fii?.net, icon: '🌍' }, { l: 'DII Flow', v: institutionalData?.dii?.net, icon: '🏦' }].map(f => (

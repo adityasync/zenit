@@ -28,6 +28,7 @@ async function fetchAPI<T>(path: string, cacheTTL = 5000): Promise<T | null> {
     const response = await fetch(`${STOCK_API}${path}`, {
       headers: { "User-Agent": "ZENIT/1.0" },
       signal: AbortSignal.timeout(8000),
+      cache: "no-store",
     });
 
     if (!response.ok) return null;
@@ -62,6 +63,7 @@ interface TickerData {
   change: number;
   percentChange: number;
   timestamp: number;
+  isDelayed?: boolean;
 }
 
 interface BreadthData {
@@ -179,18 +181,22 @@ async function fetchBatchStocks(symbols: string[]): Promise<Map<string, StockDat
 
       if (data?.stocks) {
         for (const stock of data.stocks) {
+          const lastPrice = stock.last_price;
+          const prevClose = stock.previous_close || 0;
+          const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
+          
           result.set(stock.symbol, {
             symbol: stock.symbol,
-            last_price: stock.last_price || 0,
-            change: stock.change || 0,
-            percent_change: stock.percent_change || 0,
+            last_price: isLive ? lastPrice : prevClose,
+            change: isLive ? (stock.change || 0) : 0,
+            percent_change: isLive ? (stock.percent_change || 0) : 0,
             volume: stock.volume || 0,
             market_cap: stock.market_cap || 0,
             sector: stock.sector || "",
-            open: stock.open || 0,
-            day_high: stock.day_high || 0,
-            day_low: stock.day_low || 0,
-            previous_close: stock.previous_close || 0,
+            open: (stock.open && !isNaN(stock.open)) ? stock.open : prevClose,
+            day_high: (stock.day_high && !isNaN(stock.day_high)) ? stock.day_high : prevClose,
+            day_low: (stock.day_low && !isNaN(stock.day_low)) ? stock.day_low : prevClose,
+            previous_close: prevClose,
             company_name: stock.company_name || stock.symbol,
           });
         }
@@ -218,11 +224,10 @@ function deriveIndex(
   }
 
   if (changes.length === 0) {
-    const small = (Math.random() - 0.5) * 0.6;
     return {
-      value: parseFloat((baseValue * (1 + small / 100)).toFixed(2)),
-      change: parseFloat((baseValue * small / 100).toFixed(2)),
-      percentChange: parseFloat(small.toFixed(2)),
+      value: baseValue,
+      change: 0,
+      percentChange: 0,
     };
   }
 
@@ -237,84 +242,9 @@ function deriveIndex(
   };
 }
 
-function randomVariance(base: number, pct = 0.003): number {
-  return base * (1 + (Math.random() - 0.5) * pct * 2);
-}
-
 // ─── Fallback generators ───────────────────────────────────────
 
-function getDefaultIndices(): IndexData[] {
-  const base = [
-    { symbol: "NIFTY50", name: "NIFTY 50", base: 22850.75 },
-    { symbol: "NIFTYBANK", name: "NIFTY BANK", base: 48482.30 },
-    { symbol: "SENSEX", name: "SENSEX", base: 75468.52 },
-    { symbol: "NIFTYIT", name: "NIFTY IT", base: 41456.80 },
-    { symbol: "NIFTYAUTO", name: "NIFTY AUTO", base: 24489.45 },
-    { symbol: "NIFTYPHARMA", name: "NIFTY PHARMA", base: 23856.80 },
-  ];
-  return base.map(idx => {
-    const pct = (Math.random() - 0.5) * 0.6;
-    return {
-      ...idx,
-      value: parseFloat((idx.base * (1 + pct / 100)).toFixed(2)),
-      change: parseFloat((idx.base * pct / 100).toFixed(2)),
-      percentChange: parseFloat(pct.toFixed(2)),
-      timestamp: Date.now(),
-    };
-  });
-}
 
-function getDefaultBreadth(): BreadthData {
-  return {
-    advances: 1200 + Math.floor(Math.random() * 200),
-    declines: 600 + Math.floor(Math.random() * 150),
-    unchanged: 30 + Math.floor(Math.random() * 30),
-    timestamp: Date.now(),
-  };
-}
-
-function getDefaultSectors(): SectorData[] {
-  const base = [
-    { name: "NIFTY BANK", symbol: "BFSI", base: 45234.50 },
-    { name: "NIFTY IT", symbol: "IT", base: 38145.20 },
-    { name: "NIFTY AUTO", symbol: "AUTO", base: 23856.80 },
-    { name: "NIFTY PHARMA", symbol: "PHARMA", base: 17892.45 },
-    { name: "NIFTY METAL", symbol: "METAL", base: 8456.30 },
-    { name: "NIFTY FMCG", symbol: "FMCG", base: 52134.80 },
-    { name: "NIFTY ENERGY", symbol: "ENERGY", base: 28145.60 },
-    { name: "NIFTY REALTY", symbol: "REALTY", base: 756.20 },
-  ];
-  return base.map(s => ({
-    ...s,
-    value: parseFloat(randomVariance(s.base, 0.005).toFixed(2)),
-    percentChange: parseFloat(((Math.random() - 0.5) * 4).toFixed(2)),
-  }));
-}
-
-const GAINER_POOL = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "BHARTIARTL", "LT", "ITC", "KOTAKBANK", "ADANIENT", "HAL"];
-const LOSER_POOL = ["TATASTEEL", "JSWSTEEL", "HINDALCO", "ADANIPORTS", "SBILIFE", "COALINDIA", "BPCL", "NTPC", "POWERGRID", "GRASIM"];
-
-function getDefaultGainers(): GainerLoser[] {
-  return [...GAINER_POOL].sort(() => Math.random() - 0.5).slice(0, 5).map(sym => ({
-    symbol: sym,
-    ltp: parseFloat((100 + Math.random() * 4000).toFixed(2)),
-    percentChange: parseFloat((1 + Math.random() * 5).toFixed(2)),
-    volume: Math.floor(5000000 + Math.random() * 20000000),
-    volumeRatio: parseFloat((1 + Math.random() * 2).toFixed(2)),
-    sector: "Sector",
-  }));
-}
-
-function getDefaultLosers(): GainerLoser[] {
-  return [...LOSER_POOL].sort(() => Math.random() - 0.5).slice(0, 5).map(sym => ({
-    symbol: sym,
-    ltp: parseFloat((100 + Math.random() * 2000).toFixed(2)),
-    percentChange: parseFloat((-(1 + Math.random() * 4)).toFixed(2)),
-    volume: Math.floor(3000000 + Math.random() * 15000000),
-    volumeRatio: parseFloat((1 + Math.random() * 2).toFixed(2)),
-    sector: "Sector",
-  }));
-}
 
 // ─── Main SSE handler ───────────────────────────────────────────
 
@@ -352,7 +282,7 @@ export async function GET(request: NextRequest) {
           const hasLiveData = stockData.size > 0;
 
           // ── Indices ──
-          let indices: IndexData[];
+          let indices: IndexData[] = [];
           if (hasLiveData) {
             indices = Object.entries(INDEX_CONSTITUENTS).map(([name, config]) => {
               const derived = deriveIndex(config.symbols, config.baseValue, stockData);
@@ -363,13 +293,11 @@ export async function GET(request: NextRequest) {
                 timestamp: Date.now(),
               };
             });
-          } else {
-            indices = getDefaultIndices();
           }
           sendEvent("indices", indices);
 
           // ── Breadth (derived from stock data) ──
-          let breadth: BreadthData;
+          let breadth: BreadthData | null = null;
           if (hasLiveData) {
             let advances = 0, declines = 0, unchanged = 0;
             stockData.forEach(stock => {
@@ -380,18 +308,16 @@ export async function GET(request: NextRequest) {
             // Scale up to approximate full market breadth
             const scale = Math.max(1, Math.round(1800 / Math.max(1, stockData.size)));
             breadth = {
-              advances: advances * scale + Math.floor(Math.random() * 50),
-              declines: declines * scale + Math.floor(Math.random() * 50),
-              unchanged: unchanged * scale + Math.floor(Math.random() * 10),
+              advances: advances * scale,
+              declines: declines * scale,
+              unchanged: unchanged * scale,
               timestamp: Date.now(),
             };
-          } else {
-            breadth = getDefaultBreadth();
           }
-          sendEvent("breadth", breadth);
+          if (breadth) sendEvent("breadth", breadth);
 
           // ── Sectors ──
-          let sectors: SectorData[];
+          let sectors: SectorData[] = [];
           if (hasLiveData) {
             sectors = Object.entries(SECTOR_STOCKS).map(([symbol, config]) => {
               const derived = deriveIndex(config.symbols, 10000, stockData);
@@ -402,8 +328,6 @@ export async function GET(request: NextRequest) {
                 percentChange: derived.percentChange,
               };
             });
-          } else {
-            sectors = getDefaultSectors();
           }
           sendEvent("sectors", sectors);
 
@@ -418,7 +342,7 @@ export async function GET(request: NextRequest) {
               ltp: s.last_price,
               percentChange: s.percent_change,
               volume: s.volume,
-              volumeRatio: parseFloat((1 + Math.random() * 2).toFixed(2)),
+              volumeRatio: 1.0,
               sector: s.sector,
             }));
 
@@ -427,7 +351,7 @@ export async function GET(request: NextRequest) {
               ltp: s.last_price,
               percentChange: s.percent_change,
               volume: s.volume,
-              volumeRatio: parseFloat((1 + Math.random() * 2).toFixed(2)),
+              volumeRatio: 1.0,
               sector: s.sector,
             }));
 
@@ -446,8 +370,8 @@ export async function GET(request: NextRequest) {
               }));
             sendEvent("screener", screenerSignals);
           } else {
-            sendEvent("gainers", getDefaultGainers());
-            sendEvent("losers", getDefaultLosers());
+            sendEvent("gainers", []);
+            sendEvent("losers", []);
           }
 
           // ── Individual tickers for watchlist ──
@@ -469,11 +393,10 @@ export async function GET(request: NextRequest) {
           }
         } catch (error) {
           console.error("Error generating market data:", error);
-          sendEvent("indices", getDefaultIndices());
-          sendEvent("breadth", getDefaultBreadth());
-          sendEvent("sectors", getDefaultSectors());
-          sendEvent("gainers", getDefaultGainers());
-          sendEvent("losers", getDefaultLosers());
+          sendEvent("indices", []);
+          sendEvent("sectors", []);
+          sendEvent("gainers", []);
+          sendEvent("losers", []);
         }
       };
 

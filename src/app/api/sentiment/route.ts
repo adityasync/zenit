@@ -146,12 +146,9 @@ export async function GET() {
     return NextResponse.json(result);
   } catch (error) {
     console.error("Reddit sentiment error:", error);
-    return NextResponse.json({
-      score: 50,
-      label: "Neutral" as const,
-      topTickers: [],
-      timestamp: Date.now(),
-      error: "Failed to fetch sentiment",
-    });
+    return NextResponse.json(
+      { error: "Failed to fetch social sentiment data" },
+      { status: 503 }
+    );
   }
 }

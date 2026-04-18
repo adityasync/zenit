@@ -38,20 +38,22 @@ async function fetchBatchQuotes(symbols: string[]): Promise<any[]> {
       if (res.ok) {
         const data = await res.json();
         if (data.stocks) {
-          results.push(...data.stocks);
+          for (const stock of data.stocks) {
+            const lastPrice = stock.last_price;
+            const prevClose = stock.previous_close || 0;
+            const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
+            
+            results.push({
+              ...stock,
+              last_price: isLive ? lastPrice : prevClose,
+              percent_change: isLive ? stock.percent_change : 0,
+              isDelayed: !isLive,
+            });
+          }
         }
       }
     } catch {
-      // Fallback data for failed requests
-      chunk.forEach(sym => {
-        results.push({
-          symbol: sym,
-          last_price: 100 + Math.random() * 3000,
-          percent_change: (Math.random() - 0.5) * 6,
-          volume: Math.floor(Math.random() * 10000000),
-          market_cap: Math.floor(Math.random() * 10000000000)
-        });
-      });
+      console.error(`Heatmap chunk fetch failed for ${symList}`);
     }
   }
   

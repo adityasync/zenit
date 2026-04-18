@@ -17,34 +17,6 @@ interface OptionsChainOverlayProps {
 
 const EXPIRY_OPTIONS = ["Weekly (Apr 18)", "Next Weekly (Apr 25)", "Monthly (Apr 30)"];
 
-const generateMockChain = (atmStrike: number): OptionsChain[] => {
-  const strikes = [];
-  for (let i = -10; i <= 10; i++) {
-    const strike = atmStrike + i * 50;
-    const distanceFromATM = Math.abs(i);
-    const baseOI = 50000 + (10 - distanceFromATM) * 10000;
-
-    strikes.push({
-      strike,
-      ce: {
-        oi: baseOI + Math.random() * 20000,
-        oiChange: (Math.random() - 0.3) * 5000,
-        ltp: i < 0 ? Math.abs(i) * 5 + Math.random() * 2 : Math.max(0.5, 50 - distanceFromATM * 8 + Math.random() * 5),
-        iv: 15 + distanceFromATM * 2 + Math.random() * 5,
-        volume: Math.floor(Math.random() * 50000),
-      },
-      pe: {
-        oi: baseOI + Math.random() * 20000,
-        oiChange: (Math.random() - 0.4) * 5000,
-        ltp: i > 0 ? Math.abs(i) * 5 + Math.random() * 2 : Math.max(0.5, 50 - distanceFromATM * 8 + Math.random() * 5),
-        iv: 15 + distanceFromATM * 2 + Math.random() * 5,
-        volume: Math.floor(Math.random() * 50000),
-      },
-    });
-  }
-  return strikes.sort((a, b) => a.strike - b.strike);
-};
-
 export function OptionsChainOverlay({
   open,
   onOpenChange,
@@ -55,27 +27,43 @@ export function OptionsChainOverlay({
   const [loading, setLoading] = React.useState(false);
 
   const atmStrike = symbol === "NIFTY" ? 22800 : symbol === "BANKNIFTY" ? 48500 : 22800;
+  
   const pcr = React.useMemo(() => {
-    if (chain.length === 0) return 0;
-    const totalCE = chain.reduce((sum, s) => sum + s.ce.oi, 0);
-    const totalPE = chain.reduce((sum, s) => sum + s.pe.oi, 0);
-    return totalPE / totalCE;
+    if (!chain || chain.length === 0) return 0;
+    const totalCE = chain.reduce((sum, s) => sum + (s.ce?.oi || 0), 0);
+    const totalPE = chain.reduce((sum, s) => sum + (s.pe?.oi || 0), 0);
+    return totalCE > 0 ? totalPE / totalCE : 0;
   }, [chain]);
 
   const maxPain = React.useMemo(() => {
-    if (chain.length === 0) return atmStrike;
+    if (!chain || chain.length === 0) return atmStrike;
     return chain[Math.floor(chain.length / 2)].strike;
   }, [chain, atmStrike]);
 
   React.useEffect(() => {
     if (open) {
       setLoading(true);
-      setTimeout(() => {
-        setChain(generateMockChain(atmStrike));
-        setLoading(false);
-      }, 500);
+      fetch(`/api/options?symbol=${symbol}&expiry=${expiry}`)
+        .then(res => {
+          if (!res.ok) throw new Error("Failed to fetch");
+          return res.json();
+        })
+        .then(data => {
+          if (data && Array.isArray(data)) {
+            setChain(data);
+          } else if (data && data.data && Array.isArray(data.data)) {
+            setChain(data.data);
+          } else {
+            setChain([]);
+          }
+        })
+        .catch(err => {
+          console.error("Option chain fetch error:", err);
+          setChain([]);
+        })
+        .finally(() => setLoading(false));
     }
-  }, [open, expiry, atmStrike]);
+  }, [open, expiry, symbol]);
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -159,6 +147,11 @@ export function OptionsChainOverlay({
               {loading ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-muted-foreground">Loading options chain...</div>
+                </div>
+              ) : chain.length === 0 ? (
+                <div className="flex items-center justify-center h-full flex-col gap-2">
+                  <div className="text-muted-foreground">No options data available for this expiry.</div>
+                  <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close</Button>
                 </div>
               ) : (
                 <table className="w-full text-sm">

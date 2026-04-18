@@ -11,7 +11,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const res = await fetch(`${NSE_API}/search?q=${encodeURIComponent(query)}`);
+    const res = await fetch(`${NSE_API}/search?q=${encodeURIComponent(query)}`, {
+      cache: "no-store"
+    });
     const data = await res.json();
     return NextResponse.json(data);
   } catch (error) {

@@ -16,17 +16,6 @@ const RSS_FEEDS = [
 
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
-const FALLBACK_NEWS = [
-  { id: "f1", title: "SEBI issues new guidelines for FII investments in Indian equities", link: "#", source: "Markets", timestamp: Date.now() - 3600000 },
-  { id: "f2", title: "RBI retains repo rate at current levels, inflation outlook positive", link: "#", source: "Economy", timestamp: Date.now() - 7200000 },
-  { id: "f3", title: "FII flow turns positive amid improving global market cues", link: "#", source: "Capital", timestamp: Date.now() - 10800000 },
-  { id: "f4", title: "Q4 earnings season begins with strong results from IT sector", link: "#", source: "Results", timestamp: Date.now() - 14400000 },
-  { id: "f5", title: "Nifty 50 consolidates near record highs, breadth remains strong", link: "#", source: "Markets", timestamp: Date.now() - 18000000 },
-  { id: "f6", title: "Auto sector stocks rally on robust monthly sales data", link: "#", source: "Sector", timestamp: Date.now() - 21600000 },
-  { id: "f7", title: "Government plans to boost infrastructure spending in upcoming budget", link: "#", source: "Policy", timestamp: Date.now() - 25200000 },
-  { id: "f8", title: "Metal stocks gain as China stimulus hopes lift commodity prices", link: "#", source: "Global", timestamp: Date.now() - 28800000 },
-];
-
 async function fetchRSSFeed(feed: { name: string; url: string }) {
   try {
     const parsed = await parser.parseURL(feed.url);
@@ -64,11 +53,6 @@ export async function GET(request: Request) {
       .filter((r): r is PromiseFulfilledResult<any[]> => r.status === "fulfilled")
       .flatMap(r => r.value);
 
-    // If no feeds returned data, use fallback
-    if (news.length === 0) {
-      news = FALLBACK_NEWS.map(n => ({ ...n, timestamp: Date.now() - Math.random() * 86400000 }));
-    }
-
     // Filter by symbol if provided
     if (symbol) {
       const symbolPatterns = [
@@ -93,7 +77,6 @@ export async function GET(request: Request) {
     return NextResponse.json(news);
   } catch (error) {
     console.error("RSS fetch error:", error);
-    // Return fallback news instead of error
-    return NextResponse.json(FALLBACK_NEWS);
+    return NextResponse.json([], { status: 500 });
   }
 }

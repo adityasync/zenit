@@ -29,8 +29,10 @@ export async function POST(request: Request) {
     }
 
     if (!GLM_API_KEY) {
-      const mockResponse = generateMockResponse(query, context);
-      return NextResponse.json(mockResponse);
+      return NextResponse.json(
+        { response: "AI features are currently unavailable (Missing API Key).", error: true },
+        { status: 503 }
+      );
     }
 
     const contextString = buildContextString(context);
@@ -67,16 +69,16 @@ Rules:
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      console.error("GLM API error:", error);
-      const mockResponse = generateMockResponse(query, context);
-      return NextResponse.json(mockResponse);
+      const errorText = await response.text();
+      console.error("GLM API error:", errorText);
+      return NextResponse.json(
+        { response: "I'm having trouble connecting to the AI service. Please try again later.", error: true },
+        { status: 502 }
+      );
     }
 
     const data = await response.json();
-    console.log("GLM FULL RESPONSE:", JSON.stringify(data, null, 2));
     
-    // Zhipu sometimes returns a 200 OK HTTP status but puts the error inside the JSON
     if (data.error) {
        return NextResponse.json({ 
          response: `API Error: ${data.error.message || "Unknown API error"}`, 
@@ -88,14 +90,9 @@ Rules:
     let responseText = "";
     
     if (message) {
-       // We log the reasoning content to console for debugging, but omit it from the UI for a cleaner user experience
-       if (message.reasoning_content) {
-          console.log("AI Reasoning:\n", message.reasoning_content);
-       }
        responseText = message.content || "";
     }
     
-    // Trim and use fallback if strictly empty
     responseText = responseText.trim();
     if (!responseText) {
        responseText = "I couldn't generate a response for this context. Please try again.";
@@ -151,58 +148,4 @@ function buildContextString(context?: CopilotContext | string): string {
   }
 
   return str;
-}
-
-function generateMockResponse(query: string, context?: CopilotContext): {
-  response: string;
-  timestamp: number;
-  context: CopilotContext | null;
-} {
-  const q = query.toLowerCase();
-
-  if (q.includes("why") && (q.includes("up") || q.includes("gain") || q.includes("rising"))) {
-    return {
-      response: `${context?.symbol || "The stock"} is showing strength today, likely driven by positive sector sentiment and buying interest. The price action suggests institutional accumulation, with delivery percentage indicating conviction in the move. Watch for resistance at the next key level.`,
-      timestamp: Date.now(),
-      context: context || null,
-    };
-  }
-
-  if (q.includes("why") && (q.includes("down") || q.includes("fall") || q.includes("drop"))) {
-    return {
-      response: `${context?.symbol || "The stock"} is under pressure today with selling across the sector. The negative momentum could be related to broader market weakness or sector rotation. Watch for support levels and volume confirmation before making any decisions.`,
-      timestamp: Date.now(),
-      context: context || null,
-    };
-  }
-
-  if (q.includes("delivery") || q.includes("breakout")) {
-    return {
-      response: `Delivery percentage of ${context?.deliveryPercent?.toFixed(1) || "0"}% indicates ${context?.deliveryPercent && context.deliveryPercent > 60 ? "strong" : "moderate"} conviction in today's move. High delivery with price appreciation suggests positional buying rather than intraday speculation.`,
-      timestamp: Date.now(),
-      context: context || null,
-    };
-  }
-
-  if (q.includes("oi") || q.includes("open interest")) {
-    return {
-      response: `Open interest analysis helps understand whether the current move has staying power. Rising OI with rising price indicates new positions being built, while falling OI suggests participants closing positions.`,
-      timestamp: Date.now(),
-      context: context || null,
-    };
-  }
-
-  if (q.includes("pcr") || q.includes("put-call")) {
-    return {
-      response: `Put-Call Ratio (PCR) above 1 indicates more put buying (bearish hedges), while below 1 suggests more call buying (bullish bets). Monitor PCR changes for shifts in market sentiment.`,
-      timestamp: Date.now(),
-      context: context || null,
-    };
-  }
-
-  return {
-    response: `I can help analyze ${context?.symbol || "the market"} based on price action, volume, delivery data, and news. Try asking about why a stock is moving, delivery breakouts, or OI buildup.`,
-    timestamp: Date.now(),
-    context: context || null,
-  };
 }

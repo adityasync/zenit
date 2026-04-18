@@ -19,55 +19,11 @@ import {
 } from "lucide-react";
 import type { IndexData, MarketBreadth, GainerLoser, SectorData } from "@/types/market";
 
-const SECTOR_COLORS: Record<string, string> = {
-  BFSI: "#3b82f6",
-  IT: "#8b5cf6",
-  AUTO: "#f59e0b",
-  PHARMA: "#10b981",
-  METAL: "#6366f1",
-  FMCG: "#ec4899",
-  ENERGY: "#f97316",
-  REALTY: "#14b8a6",
-  MEDIA: "#a855f7",
-};
-
-const INITIAL_INDICES: IndexData[] = [
-  { symbol: "NIFTY50", name: "NIFTY 50", value: 22850, change: 45, percentChange: 0.2, timestamp: Date.now() },
-  { symbol: "NIFTYBANK", name: "NIFTY BANK", value: 48500, change: -120, percentChange: -0.25, timestamp: Date.now() },
-  { symbol: "SENSEX", name: "SENSEX", value: 75500, change: 150, percentChange: 0.2, timestamp: Date.now() },
-  { symbol: "NIFTYIT", name: "NIFTY IT", value: 41500, change: -85, percentChange: -0.2, timestamp: Date.now() },
-  { symbol: "NIFTYAUTO", name: "NIFTY AUTO", value: 24500, change: 65, percentChange: 0.27, timestamp: Date.now() },
-  { symbol: "NIFTYPHARMA", name: "NIFTY PHARMA", value: 18200, change: -30, percentChange: -0.16, timestamp: Date.now() },
-];
-
-const INITIAL_GAINERS: GainerLoser[] = [
-  { symbol: "RELIANCE", ltp: 2950, percentChange: 3.5, volume: 15000000, volumeRatio: 2.1, sector: "Energy" },
-  { symbol: "TCS", ltp: 3850, percentChange: 2.8, volume: 8000000, volumeRatio: 1.8, sector: "IT" },
-  { symbol: "INFY", ltp: 1520, percentChange: 2.3, volume: 12000000, volumeRatio: 2.5, sector: "IT" },
-  { symbol: "HDFCBANK", ltp: 1680, percentChange: 1.9, volume: 9500000, volumeRatio: 1.6, sector: "Banking" },
-  { symbol: "LT", ltp: 3450, percentChange: 1.5, volume: 6000000, volumeRatio: 1.4, sector: "Infrastructure" },
-];
-
-const INITIAL_LOSERS: GainerLoser[] = [
-  { symbol: "TATASTEEL", ltp: 145, percentChange: -2.5, volume: 18000000, volumeRatio: 2.2, sector: "Steel" },
-  { symbol: "JSWSTEEL", ltp: 890, percentChange: -1.8, volume: 12000000, volumeRatio: 1.9, sector: "Steel" },
-  { symbol: "HINDALCO", ltp: 580, percentChange: -1.5, volume: 9000000, volumeRatio: 1.5, sector: "Metal" },
-  { symbol: "ADANIPORTS", ltp: 1250, percentChange: -1.2, volume: 7000000, volumeRatio: 1.3, sector: "Infrastructure" },
-  { symbol: "SBILIFE", ltp: 1450, percentChange: -0.9, volume: 4000000, volumeRatio: 1.2, sector: "Insurance" },
-];
-
-const INITIAL_BREADTH: MarketBreadth = {
-  advances: 1520,
-  declines: 780,
-  unchanged: 45,
-  timestamp: Date.now(),
-};
-
 export function BentoGrid() {
-  const [indices, setIndices] = useState<IndexData[]>(INITIAL_INDICES);
-  const [breadth, setBreadth] = useState<MarketBreadth | null>(INITIAL_BREADTH);
-  const [gainers, setGainers] = useState<GainerLoser[]>(INITIAL_GAINERS);
-  const [losers, setLosers] = useState<GainerLoser[]>(INITIAL_LOSERS);
+  const [indices, setIndices] = useState<IndexData[]>([]);
+  const [breadth, setBreadth] = useState<MarketBreadth | null>(null);
+  const [gainers, setGainers] = useState<GainerLoser[]>([]);
+  const [losers, setLosers] = useState<GainerLoser[]>([]);
   const [sectors, setSectors] = useState<SectorData[]>([]);
 
   const handleIndexUpdate = useCallback((newIndices: IndexData[]) => {
@@ -171,8 +127,8 @@ function IndicesRow({ indices }: { indices: IndexData[] }) {
 
 function MarketBreadthCard({ breadth }: { breadth: MarketBreadth | null }) {
   const total = breadth ? breadth.advances + breadth.declines + breadth.unchanged : 0;
-  const advancePct = breadth ? (breadth.advances / total) * 100 : 33;
-  const declinePct = breadth ? (breadth.declines / total) * 100 : 33;
+  const advancePct = total > 0 ? (breadth!.advances / total) * 100 : 0;
+  const declinePct = total > 0 ? (breadth!.declines / total) * 100 : 0;
 
   return (
     <Card className="h-full">
@@ -230,7 +186,7 @@ function GainersCard({ gainers }: { gainers: GainerLoser[] }) {
         <div className="space-y-2">
           {gainers.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              <p className="text-sm">Loading gainers...</p>
+              <p className="text-sm">No gainer data available</p>
             </div>
           ) : (
             gainers.slice(0, 5).map((stock, i) => (
@@ -262,7 +218,7 @@ function GainersCard({ gainers }: { gainers: GainerLoser[] }) {
                 </div>
                 <div className="w-20">
                   <Sparkline
-                    data={generateMockSparkline(stock.percentChange ?? 0)}
+                    data={[]}
                     color="#22c55e"
                     width={80}
                     height={24}
@@ -290,7 +246,7 @@ function LosersCard({ losers }: { losers: GainerLoser[] }) {
         <div className="space-y-2">
           {losers.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              <p className="text-sm">Loading losers...</p>
+              <p className="text-sm">No loser data available</p>
             </div>
           ) : (
             losers.slice(0, 5).map((stock, i) => (
@@ -322,7 +278,7 @@ function LosersCard({ losers }: { losers: GainerLoser[] }) {
                 </div>
                 <div className="w-20">
                   <Sparkline
-                    data={generateMockSparkline(stock.percentChange ?? 0)}
+                    data={[]}
                     color="#ef4444"
                     width={80}
                     height={24}
@@ -338,19 +294,6 @@ function LosersCard({ losers }: { losers: GainerLoser[] }) {
 }
 
 function SectorHeatmap({ sectors }: { sectors: SectorData[] }) {
-  const defaultSectors: SectorData[] = [
-    { name: "NIFTY BFSI", symbol: "BFSI", value: 45000, percentChange: 0.8 },
-    { name: "NIFTY IT", symbol: "IT", value: 38000, percentChange: -0.3 },
-    { name: "NIFTY AUTO", symbol: "AUTO", value: 24000, percentChange: 1.2 },
-    { name: "NIFTY PHARMA", symbol: "PHARMA", value: 18000, percentChange: -0.5 },
-    { name: "NIFTY METAL", symbol: "METAL", value: 8500, percentChange: 2.1 },
-    { name: "NIFTY FMCG", symbol: "FMCG", value: 52000, percentChange: 0.2 },
-    { name: "NIFTY ENERGY", symbol: "ENERGY", value: 28000, percentChange: -0.8 },
-    { name: "NIFTY REALTY", symbol: "REALTY", value: 750, percentChange: 1.5 },
-  ];
-
-  const displaySectors = sectors.length > 0 ? sectors : defaultSectors;
-
   const getSectorDisplayName = (sector: SectorData) => {
     if (sector.name.startsWith("NIFTY ")) {
       return sector.name.replace("NIFTY ", "");
@@ -367,55 +310,46 @@ function SectorHeatmap({ sectors }: { sectors: SectorData[] }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-          {displaySectors.map((sector, i) => {
-            const pct = sector.percentChange;
-            const intensity = Math.min(Math.abs(pct) / 2, 1);
-            const baseColor = pct >= 0 ? [22, 197, 94] : [239, 68, 68];
-            const bgColor = `rgba(${baseColor.join(",")}, ${0.1 + intensity * 0.3})`;
-            const borderColor = `rgba(${baseColor.join(",")}, ${0.3 + intensity * 0.5})`;
+        {sectors.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <p className="text-sm">No sector data available</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+            {sectors.map((sector, i) => {
+              const pct = sector.percentChange;
+              const intensity = Math.min(Math.abs(pct) / 2, 1);
+              const baseColor = pct >= 0 ? [22, 197, 94] : [239, 68, 68];
+              const bgColor = `rgba(${baseColor.join(",")}, ${0.1 + intensity * 0.3})`;
+              const borderColor = `rgba(${baseColor.join(",")}, ${0.3 + intensity * 0.5})`;
 
-            return (
-              <motion.div
-                key={sector.symbol || sector.name}
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: i * 0.03 }}
-                className="p-3 rounded-lg border cursor-pointer hover:scale-105 transition-transform"
-                style={{
-                  backgroundColor: bgColor,
-                  borderColor: borderColor,
-                }}
-              >
-                <div className="text-xs font-medium text-center mb-1">
-                  {getSectorDisplayName(sector)}
-                </div>
-                <div
-                  className={`font-mono text-sm text-center ${pct >= 0 ? "text-positive" : "text-negative"}`}
+              return (
+                <motion.div
+                  key={sector.symbol || sector.name}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.03 }}
+                  className="p-3 rounded-lg border cursor-pointer hover:scale-105 transition-transform"
+                  style={{
+                    backgroundColor: bgColor,
+                    borderColor: borderColor,
+                  }}
                 >
-                  {pct >= 0 ? "+" : ""}
-                  {pct.toFixed(2)}%
-                </div>
-              </motion.div>
-            );
-          })}
-        </div>
+                  <div className="text-xs font-medium text-center mb-1">
+                    {getSectorDisplayName(sector)}
+                  </div>
+                  <div
+                    className={`font-mono text-sm text-center ${pct >= 0 ? "text-positive" : "text-negative"}`}
+                  >
+                    {pct >= 0 ? "+" : ""}
+                    {pct.toFixed(2)}%
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
-}
-
-function generateMockSparkline(trend: number): number[] {
-  const points = 15;
-  const data: number[] = [];
-  let value = 100;
-
-  for (let i = 0; i < points; i++) {
-    const volatility = 2;
-    const trendBias = trend > 0 ? 0.3 : trend < 0 ? -0.3 : 0;
-    value += (Math.random() - 0.5 + trendBias) * volatility;
-    data.push(Math.max(0, value));
-  }
-
-  return data;
 }

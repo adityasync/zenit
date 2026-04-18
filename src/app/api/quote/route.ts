@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+
 const STOCK_API = "https://nse-api-ruby.vercel.app";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
@@ -8,6 +11,7 @@ async function fetchStock(symbol: string, forceRefresh = false): Promise<unknown
   if (!forceRefresh) {
     const cached = CACHE.get(cacheKey);
     if (cached && cached.expiry > Date.now()) {
+      console.log("[DEBUG] Using cache for", symbol, "expiry:", cached.expiry, "now:", Date.now());
       return cached.data;
     }
   }
@@ -15,15 +19,26 @@ async function fetchStock(symbol: string, forceRefresh = false): Promise<unknown
   try {
     const res = await fetch(`${STOCK_API}/stock?symbol=${symbol}.NS&res=num`, {
       signal: AbortSignal.timeout(8000),
+      cache: 'no-store',
     });
+    console.log("[DEBUG] Fetch status for", symbol, ":", res.status);
     if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      const text = await res.text();
+      console.log("[DEBUG] Non-JSON response for", symbol, ":", text.substring(0, 200));
+      return null;
+    }
     const data = await res.json();
+    console.log("[DEBUG] Full API response for", symbol, ":", JSON.stringify(data));
     if (data.status === "success" && data.data) {
+      console.log("[DEBUG] Caching data for", symbol);
       CACHE.set(cacheKey, { data, expiry: Date.now() + 5000 });
       return data;
     }
     return null;
-  } catch {
+  } catch (e) {
+    console.log("[DEBUG] Error fetching", symbol, ":", e);
     return null;
   }
 }
@@ -45,6 +60,7 @@ interface StockQuote {
   weekHigh52?: number;
   weekLow52?: number;
   timestamp: number;
+  isDelayed?: boolean;
 }
 
 export async function GET(request: Request) {
@@ -62,47 +78,32 @@ export async function GET(request: Request) {
 
   if (data && (data as any).data) {
     const d = (data as any).data;
+    console.log("[DEBUG] API data for", upperSymbol, ":", JSON.stringify(d));
+    const lastPrice = d.last_price;
+    const prevClose = d.previous_close || 0;
+    const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
+    console.log("[DEBUG] lastPrice:", lastPrice, "prevClose:", prevClose, "isLive:", isLive);
+
     const quote: StockQuote = {
       symbol: upperSymbol,
       name: d.company_name || upperSymbol,
-      ltp: d.last_price || 0,
-      open: d.open || 0,
-      high: d.day_high || 0,
-      low: d.day_low || 0,
-      close: d.previous_close || 0,
-      change: d.change || 0,
-      percentChange: d.percent_change || 0,
+      ltp: isLive ? lastPrice : prevClose,
+      open: (d.open && !isNaN(d.open)) ? d.open : prevClose,
+      high: (d.day_high && !isNaN(d.day_high)) ? d.day_high : prevClose,
+      low: (d.day_low && !isNaN(d.day_low)) ? d.day_low : prevClose,
+      close: prevClose,
+      change: isLive ? (d.change || 0) : 0,
+      percentChange: isLive ? (d.percent_change || 0) : 0,
       volume: d.volume || 0,
       sector: d.sector || "",
       pe_ratio: d.pe_ratio || 0,
       market_cap: d.market_cap || 0,
       weekHigh52: d.year_high || 0,
       weekLow52: d.year_low || 0,
-      timestamp: Date.now(),
+      timestamp: d.last_update ? new Date(d.last_update).getTime() : Date.now(),
+      isDelayed: !isLive,
     };
     return NextResponse.json(quote);
   }
-
-  // Fallback: generate realistic data
-  const basePrice = (100 + Math.random() * 5000);
-  const change = parseFloat(((Math.random() - 0.5) * basePrice * 0.02).toFixed(2));
-
-  const quote: StockQuote = {
-    symbol: upperSymbol,
-    name: upperSymbol,
-    ltp: parseFloat(basePrice.toFixed(2)),
-    open: parseFloat((basePrice * 0.998).toFixed(2)),
-    high: parseFloat((basePrice * 1.01).toFixed(2)),
-    low: parseFloat((basePrice * 0.99).toFixed(2)),
-    close: parseFloat((basePrice - change).toFixed(2)),
-    change: change,
-    percentChange: parseFloat((change / basePrice * 100).toFixed(2)),
-    volume: Math.floor(1000000 + Math.random() * 20000000),
-    sector: "Unknown",
-    weekHigh52: parseFloat((basePrice * 1.3).toFixed(2)),
-    weekLow52: parseFloat((basePrice * 0.7).toFixed(2)),
-    timestamp: Date.now(),
-  };
-
-  return NextResponse.json(quote);
+  return NextResponse.json({ error: "Data not available" }, { status: 404 });
 }
