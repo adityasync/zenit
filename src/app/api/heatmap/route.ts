@@ -23,41 +23,66 @@ const INDEX_STOCKS: Record<string, string[]> = {
   'sensex': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL'],
 };
 
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+    } catch (err) {
+      if (attempt === retries - 1) throw err;
+    }
+    if (attempt < retries - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  throw new Error('All retries failed');
+}
+
 async function fetchBatchQuotes(symbols: string[]): Promise<any[]> {
-  const results: any[] = [];
-  const chunkSize = 10;
+  const chunkSize = 5;
+  const chunks: string[][] = [];
   
   for (let i = 0; i < symbols.length; i += chunkSize) {
-    const chunk = symbols.slice(i, i + chunkSize);
-    const symList = chunk.join(',');
-    
+    chunks.push(symbols.slice(i, i + chunkSize));
+  }
+
+  const flatResults: any[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
     try {
-      const res = await fetch(`${NSE_API}/stock/list?symbols=${symList}&res=num`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.stocks) {
-          for (const stock of data.stocks) {
-            const lastPrice = stock.last_price;
-            const prevClose = stock.previous_close || 0;
-            const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
-            
-            results.push({
-              ...stock,
-              last_price: isLive ? lastPrice : prevClose,
-              percent_change: isLive ? stock.percent_change : 0,
-              isDelayed: !isLive,
-            });
-          }
+      const symList = chunk.join(',');
+      const res = await fetchWithRetry(
+        `${NSE_API}/stock/list?symbols=${symList}&res=num`,
+        { signal: AbortSignal.timeout(45000) },
+        3
+      );
+      const data = await res.json();
+      
+      if (data.stocks) {
+        for (const stock of data.stocks) {
+          const lastPrice = stock.last_price;
+          const prevClose = stock.previous_close || 0;
+          const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
+          
+          flatResults.push({
+            ...stock,
+            last_price: isLive ? lastPrice : prevClose,
+            percent_change: isLive ? stock.percent_change : 0,
+            isDelayed: !isLive,
+          });
         }
       }
-    } catch {
-      console.error(`Heatmap chunk fetch failed for ${symList}`);
+    } catch (err) {
+      console.error(`Heatmap chunk fetch failed for ${chunk.join(',')}`, err);
+    }
+
+    if (i < chunks.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 800));
     }
   }
   
-  return results;
+  return flatResults;
 }
 
 export async function GET(request: Request) {
@@ -66,11 +91,11 @@ export async function GET(request: Request) {
   const forceRefresh = searchParams.get("refresh") === "true";
 
   const cacheKey = `heatmap:${view}`;
-  if (!forceRefresh) {
-    const cached = CACHE.get(cacheKey);
-    if (cached && cached.expiry > Date.now()) {
-      return NextResponse.json(cached.data);
-    }
+  const cached = CACHE.get(cacheKey);
+
+  // Stale-While-Revalidate pattern: Refresh in background if slightly stale
+  if (!forceRefresh && cached && cached.expiry > Date.now()) {
+    return NextResponse.json(cached.data);
   }
 
   try {
@@ -84,15 +109,13 @@ export async function GET(request: Request) {
       Object.entries(SECTOR_MAPPINGS).forEach(([sector, symbols]) => {
         groups[sector] = stocks.filter(s => symbols.includes(s.symbol));
       });
-    } else if (INDEX_STOCKS[view]) {
-      stocks = await fetchBatchQuotes(INDEX_STOCKS[view]);
-      groups = { [view]: stocks };
     } else {
-      stocks = await fetchBatchQuotes(INDEX_STOCKS['Nifty 50']);
-      groups = { 'Nifty 50': stocks };
+      const symbols = INDEX_STOCKS[view] || INDEX_STOCKS['nifty50'];
+      stocks = await fetchBatchQuotes(symbols);
+      groups = { [view]: stocks };
     }
 
-    const response = {
+    const responseData = {
       view,
       timestamp: Date.now(),
       stocks,
@@ -100,10 +123,15 @@ export async function GET(request: Request) {
       totalStocks: stocks.length
     };
 
-    CACHE.set(cacheKey, { data: response, expiry: Date.now() + 60000 });
-    return NextResponse.json(response);
+    // Cache for 5 minutes
+    CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 300000 });
+    return NextResponse.json(responseData);
   } catch (error) {
     console.error("Heatmap error:", error);
+    // Return stale data on error if available
+    if (cached) {
+       return NextResponse.json(cached.data);
+    }
     return NextResponse.json({ error: "Failed to fetch heatmap data" }, { status: 500 });
   }
 }

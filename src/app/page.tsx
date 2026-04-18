@@ -35,6 +35,7 @@ import {
   Maximize2,
   Minimize2
 } from 'lucide-react';
+import { StartupLoading } from "@/components/startup-loading";
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSSE } from "@/hooks/useSSE";
 import { MobileNav, MobileTab } from "@/components/mobile-nav";
@@ -69,47 +70,70 @@ const WidgetHeader = ({ title, icon: Icon, extra, onExpand }: { title: string; i
   </div>
 );
 
-const CandlestickChart = ({ height = 180, data, activeSymbol }: { height?: number; data?: number[]; activeSymbol?: string }) => {
-  const candles = useMemo(() => {
-    if (data && data.length > 0) {
-      return data.map((val, i) => {
-        const open = val * 0.99;
-        const close = val;
-        return { open, close, high: val * 1.01, low: open * 0.99 };
-      });
-    }
-    return [];
-  }, [data]);
-
-  if (!candles || candles.length === 0) {
+const CandlestickChart = ({ height = 180, data = [] }: { height?: number; data?: any[] }) => {
+  if (!data || data.length === 0) {
     return (
       <div className="w-full bg-zinc-950/40 rounded border border-white/5 relative overflow-hidden flex items-center justify-center" style={{ height }}>
-        <span className="text-[10px] text-zinc-600 font-mono">No chart data available</span>
+        <div className="flex flex-col items-center gap-2">
+          <Activity className="w-5 h-5 text-zinc-700 animate-pulse" />
+          <span className="text-[10px] text-zinc-600 font-mono">No historical data available</span>
+        </div>
       </div>
     );
   }
 
-  const max = Math.max(...candles.map(c => c.high));
-  const min = Math.min(...candles.map(c => c.low));
+  const max = Math.max(...data.map(c => c.high));
+  const min = Math.min(...data.map(c => c.low));
   const range = max - min;
   const getY = (v: number) => height - ((v - min) / (range || 1)) * height;
+  const candleWidth = 100 / (data.length || 1);
 
   return (
-    <div className="w-full bg-zinc-950/40 rounded border border-white/5 relative overflow-hidden" style={{ height }}>
+    <div className="w-full bg-zinc-950/40 rounded-xl border border-white/5 relative overflow-hidden group" style={{ height }}>
       <svg width="100%" height={height} className="overflow-visible">
-        {candles.map((c, i) => {
-          const x = i * 11 + 10;
-          const isUp = c.close >= c.open;
-          const color = isUp ? '#10b981' : '#f43f5e';
+        {/* Horizontal Grid Lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((p) => {
+          const y = height * p;
+          const price = max - (p * range);
           return (
-            <g key={i} className="transition-all duration-500">
-              <line x1={x + 4} x2={x + 4} y1={getY(c.high)} y2={getY(c.low)} stroke={color} strokeWidth={1} />
-              <rect x={x} y={Math.min(getY(c.open), getY(c.close))} width={8} height={Math.max(2, Math.abs(getY(c.open) - getY(c.close)))} fill={color} />
+            <g key={p}>
+              <line x1="0" y1={y} x2="100%" y2={y} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
+              <text x="4" y={y - 4} className="text-[8px] fill-zinc-700 font-mono">{formatNumber(price)}</text>
+            </g>
+          );
+        })}
+
+        {/* Candles */}
+        {data.map((c, i) => {
+          const isGreen = c.close >= c.open;
+          const color = isGreen ? "#10b981" : "#ef4444";
+          const bodyTop = getY(Math.max(c.open, c.close));
+          const bodyBottom = getY(Math.min(c.open, c.close));
+          const bodyHeight = Math.max(1, bodyBottom - bodyTop);
+          const centerX = (i + 0.5) * candleWidth;
+          const midX = `${centerX}%`;
+
+          return (
+            <g key={i}>
+              <line 
+                x1={midX} y1={getY(c.high)} 
+                x2={midX} y2={getY(c.low)} 
+                stroke={color} strokeWidth="1" opacity="0.6" 
+              />
+              <rect
+                x={`${i * candleWidth + 0.1}%`}
+                y={bodyTop}
+                width={`${candleWidth - 0.2}%`}
+                height={bodyHeight}
+                fill={color}
+                opacity={isGreen ? "0.3" : "0.5"}
+                className="transition-all hover:opacity-100"
+              />
             </g>
           );
         })}
       </svg>
-      <div className="absolute top-2 left-2 text-[8px] font-mono text-zinc-600 uppercase tracking-widest">Real-time OHLCV Stream</div>
+      <div className="absolute top-2 right-2 text-[8px] font-mono text-zinc-600 uppercase tracking-widest">90D Historical Stream</div>
     </div>
   );
 };
@@ -136,14 +160,16 @@ async function callCopilotAPI(query: string, context: string = "") {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, context }),
     });
+    const data = await res.json();
     if (res.ok) {
-      const data = await res.json();
-      return { text: data.response || data.text || "No response generated.", sources: data.sources || [] };
+      return { text: data.response || "No response generated.", sources: data.sources || [] };
+    } else {
+      return { text: data.response || "AI service error occurred.", error: true };
     }
   } catch (err) {
     console.error("Copilot API error:", err);
+    return { text: "Network error connecting to Intelligence Engine.", error: true };
   }
-  return { text: "Intelligence engine currently unavailable.", error: true };
 }
 
 export default function App() {
@@ -185,6 +211,9 @@ export default function App() {
   const [alerts, setAlerts] = useState<{ symbol: string; targetPrice: number; condition: 'above' | 'below'; triggered: boolean }[]>([]);
   const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(false);
+  
+  // Startup loading handled via state, no automatic initialization
 
   useEffect(() => {
     const stored = localStorage.getItem(WATCHLIST_KEY);
@@ -380,30 +409,27 @@ export default function App() {
     setStockInsight({ text: "", loading: true });
     setChartLoading(true);
     
-    try {
-      const [chartRes, insightRes] = await Promise.all([
-        fetch(`/api/history?symbol=${stock.symbol}&days=90`),
-        callCopilotAPI(`Analyze ${stock.symbol} - give a 2-sentence professional summary of the move.`, `Symbol: ${stock.symbol}, Price: ${stock.ltp}, Change: ${stock.percentChange}%`)
-      ]);
-      
-      if (chartRes.ok) {
-        const chartData = await chartRes.json();
-        if (chartData.candles) {
-          const formatted = chartData.candles.map((c: any) => ({
-            time: c.time,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close
-          }));
-          setChartData(formatted);
+    // Fetch chart and insight independently to prevent blocking
+    fetch(`/api/history?symbol=${stock.symbol}&days=90`)
+      .then(async (res) => {
+        if (res.ok) {
+          const history = await res.json();
+          if (history.candles && Array.isArray(history.candles)) {
+            setChartData(history.candles);
+          }
         }
-      }
-      setStockInsight({ text: insightRes.text, loading: false });
-    } catch (err) {
-      setStockInsight({ text: "Failed to load data", loading: false });
-    }
-    setChartLoading(false);
+      })
+      .catch(err => console.error("Chart fetch error:", err))
+      .finally(() => setChartLoading(false));
+
+    callCopilotAPI(
+      `Analyze ${stock.symbol} - give a 2-sentence professional summary of the move.`, 
+      `Symbol: ${stock.symbol}, Price: ${stock.ltp}, Change: ${stock.percentChange}%`
+    ).then(res => {
+      setStockInsight({ text: res.text, loading: false });
+    }).catch(err => {
+      setStockInsight({ text: "Insight currently unavailable", loading: false });
+    });
   }, []);
 
   const handleCopilotSubmit = useCallback(async (e?: React.FormEvent) => {
@@ -412,10 +438,17 @@ export default function App() {
     
     setCopilotResponse({ text: "", loading: true, sources: [] });
     
-    const context = `Current indices: ${indices.map(i => i.name + ': ' + i.value).join(', ')}. ${institutionalData?.fii ? 'Institutional Flows (in Crores): FII Net ' + (institutionalData.fii.net || 0) + ', DII Net ' + (institutionalData.dii.net || 0) + '.' : ''} Account Balance: ${balance}.`;
+    const context = `
+      Current Indices: ${indices.map(i => i.name + ': ' + i.value + ' (' + (i.percentChange || 0).toFixed(2) + '%)').join(', ')}.
+      Market Sentiment Score: ${sentiment?.score || 50} (${sentiment?.label || 'Neutral'}).
+      ${institutionalData?.fii ? 'Institutional flows (in Cr): FII ' + (institutionalData.fii.net || 0) + ', DII ' + (institutionalData.dii.net || 0) + '.' : ''}
+      Portfolio Balance: ₹${balance.toLocaleString()}.
+      Current Watchlist: ${watchlist.map(w => w.symbol).join(', ')}.
+    `.trim();
+
     const res = await callCopilotAPI(copilotQuery, context);
     setCopilotResponse({ text: res.text, loading: false, sources: res.sources || [] });
-  }, [copilotQuery, indices, institutionalData, balance]);
+  }, [copilotQuery, indices, institutionalData, balance, sentiment, watchlist]);
 
   const executeTrade = useCallback((action: 'BUY' | 'SELL') => {
     if (!selectedStock) return;
@@ -483,9 +516,19 @@ export default function App() {
   const displaySectors = sectors;
 
   return (
-    <div className="fixed inset-0 bg-zinc-950 text-zinc-300 select-none overflow-hidden font-sans flex flex-col h-screen">
-      <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-3">
-        <header className="flex items-center justify-between border-b border-white/5 pb-2">
+    <AnimatePresence mode="wait">
+      {isInitializing ? (
+        <StartupLoading key="loading" />
+      ) : (
+        <motion.div 
+          key="dashboard"
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
+          className="fixed inset-0 bg-zinc-950 text-zinc-300 select-none overflow-hidden font-sans flex flex-col h-screen"
+        >
+          <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-3">
+            <header className="flex items-center justify-between border-b border-white/5 pb-2">
           <div className="flex items-center gap-6 overflow-x-auto no-scrollbar pr-4">
             <div className="flex items-center gap-2 group cursor-pointer shrink-0 ml-4" onClick={() => window.location.reload()}>
               <img src="/icons/logo.png" alt="ZENIT Logo" className="w-7 h-7 object-contain group-hover:scale-110 transition-transform" />
@@ -742,16 +785,16 @@ export default function App() {
                 <option key={w.symbol} value={w.symbol}>{w.symbol}</option>
               ))}
             </select>
-            <div className="flex-1 min-h-0">
+            <div className="flex-1 min-h-0 min-w-0 overflow-hidden relative mt-1 bg-zinc-950/20 rounded-lg">
               {chartLoading ? (
                 <div className="w-full h-full flex items-center justify-center">
                   <Loader2 className="animate-spin text-zinc-600" size={24} />
                 </div>
               ) : chartData.length > 0 ? (
-                <RealCandlestickChart data={chartData} height={250} />
+                <RealCandlestickChart data={chartData} height={200} />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-zinc-500 text-[10px]">
-                  Select a stock to view chart
+                <div className="w-full h-full flex items-center justify-center text-zinc-500 text-[10px] italic">
+                  Select a stock to generate chart
                 </div>
               )}
             </div>
@@ -1346,9 +1389,31 @@ export default function App() {
               <div className="flex-1 p-4 overflow-hidden">
                 {!heatmapData ? (
                   <div className="w-full h-full flex items-center justify-center">
-                    <div className="text-center">
-                      <Activity size={32} className="mx-auto mb-2 text-zinc-700 animate-pulse" />
-                      <p className="text-zinc-600 text-sm">Loading heatmap data...</p>
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="relative">
+                        <motion.div 
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                          className="w-16 h-16 border-2 border-amber-500/20 border-t-amber-500 rounded-full"
+                        />
+                        <div className="absolute inset-2 bg-zinc-900 rounded-full flex items-center justify-center">
+                          <Layers size={20} className="text-amber-500" />
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-zinc-300 text-sm font-medium">Loading Market Heatmap</p>
+                        <p className="text-zinc-600 text-xs mt-1">Fetching sector data...</p>
+                      </div>
+                      <div className="flex gap-1 mt-2">
+                        {[0, 1, 2, 3].map((i) => (
+                          <motion.div
+                            key={i}
+                            animate={{ opacity: [0.3, 1, 0.3] }}
+                            transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                            className="w-1.5 h-1.5 bg-amber-500 rounded-full"
+                          />
+                        ))}
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -1468,6 +1533,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-    </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

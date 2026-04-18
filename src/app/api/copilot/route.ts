@@ -36,24 +36,34 @@ export async function POST(request: Request) {
     }
 
     const contextString = buildContextString(context);
-    const systemPrompt = `You are ZENIT, an Indian stock market intelligence assistant. You analyze market data and provide concise, helpful explanations.
+    const systemPrompt = `You are ZENIT, an expert Indian stock market analyst AI assistant. Your role is to provide clear, actionable market intelligence.
 
-Rules:
-- Keep responses to 3-6 sentences maximum
-- Focus on facts from the provided context
-- If insufficient data, say "I don't have enough data to answer that"
-- Never provide buy/sell recommendations
-- Be specific about price levels and percentage moves
-- Reference relevant news or technical factors when available`;
+CORE RESPONSIBILITIES:
+- Analyze price movements, volume patterns, delivery percentages, and sector trends
+- Explain why a stock is moving up or down based on available data
+- Identify potential breakout opportunities and key support/resistance levels
+- Summarize relevant news and its potential market impact
 
+RESPONSE STYLE:
+- Keep responses concise: 2-4 sentences maximum
+- Always include specific price levels and percentage moves when available
+- Use ₹ symbol for Indian stocks
+- Be analytical and factual - never give buy/sell recommendations
+- If data is insufficient, clearly state "I don't have enough data to answer that"
+- Reference delivery %, volume, and news when relevant
+
+OUTPUT FORMAT: Plain conversational text, no markdown or bullet points needed.`;
+
+    console.log(`[COPILOT] Requesting reasoning for query: "${query.substring(0, 50)}..."`);
     const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${GLM_API_KEY}`
       },
+      signal: AbortSignal.timeout(30000), // 30s timeout to prevent hangs
       body: JSON.stringify({
-        model: "glm-4.7-flash",
+        model: "glm-4.5-flash",
         max_tokens: 2000,
         messages: [
           {
@@ -70,9 +80,9 @@ Rules:
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("GLM API error:", errorText);
+      console.error("[GLM ERROR]", response.status, errorText);
       return NextResponse.json(
-        { response: "I'm having trouble connecting to the AI service. Please try again later.", error: true },
+        { response: `AI Engine Error (${response.status}): ${errorText.substring(0, 100)}`, error: true },
         { status: 502 }
       );
     }
@@ -80,8 +90,9 @@ Rules:
     const data = await response.json();
     
     if (data.error) {
+       console.error("[GLM PAYLOAD ERROR]", data.error);
        return NextResponse.json({ 
-         response: `API Error: ${data.error.message || "Unknown API error"}`, 
+         response: `AI Payload Error: ${data.error.message || "Unknown error"}`, 
          error: true 
        });
     }
@@ -95,7 +106,7 @@ Rules:
     
     responseText = responseText.trim();
     if (!responseText) {
-       responseText = "I couldn't generate a response for this context. Please try again.";
+       responseText = "The AI generated an empty response. This might be due to content filtering.";
     }
 
     const result = {
@@ -104,7 +115,8 @@ Rules:
       context: context || null,
     };
 
-    CACHE.set(cacheKey, { data: result, expiry: Date.now() + 900000 });
+    // Cache for 1 minute for better "live" experience
+    CACHE.set(cacheKey, { data: result, expiry: Date.now() + 60000 });
     return NextResponse.json(result);
   } catch (error) {
     console.error("Copilot error:", error);

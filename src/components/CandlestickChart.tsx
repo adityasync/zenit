@@ -80,16 +80,17 @@ export default function CandlestickChart({
     chartRef.current = chart;
     seriesRef.current = candlestickSeries;
 
-    const handleResize = () => {
-      if (containerRef.current) {
-        chart.applyOptions({ width: containerRef.current.clientWidth });
-      }
-    };
+    // Use ResizeObserver for perfect fit
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries.length === 0 || !chartRef.current) return;
+      const { width } = entries[0].contentRect;
+      chartRef.current.applyOptions({ width });
+    });
 
-    window.addEventListener('resize', handleResize);
+    resizeObserver.observe(containerRef.current);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       chart.remove();
     };
   }, [backgroundColor, textColor, gridColor, upColor, downColor, height]);
