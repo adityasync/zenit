@@ -218,9 +218,10 @@ export default function App() {
   const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
-  const [macroData, setMacroData] = useState({ usdInr: 0, bondYield: 0, vix: 0 });
+  const [macroData, setMacroData] = useState({ usdInr: 0, bondYield: 0, vix: 14 });
   const [orderFlow, setOrderFlow] = useState({ buyDelta: 0, sellDelta: 0, callIV: 0, putIV: 0 });
   const [correlations, setCorrelations] = useState({ itNasdaq: 0, itUsd: 0, bankYield: 0, vixNifty: 0 });
+  const [keyLevels, setKeyLevels] = useState({ support: 0, resistance: 0, pivot: 0, maxPain: 0, pcr: '0' });
   
   // Startup loading handled via state, no automatic initialization
 
@@ -390,16 +391,21 @@ export default function App() {
 
 
   useEffect(() => {
-    fetch('/api/news')
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setNewsData(data.slice(0, 7));
-        } else {
-          setNewsData([]);
-        }
-      })
-      .catch(() => setNewsData([]));
+    const fetchNews = () => {
+      fetch('/api/news?t=' + Date.now())
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            setNewsData(data.slice(0, 12));
+          } else {
+            setNewsData([]);
+          }
+        })
+        .catch(() => {});
+    };
+
+    fetchNews();
+    const newsInterval = setInterval(fetchNews, 30000); // Refresh every 30s
 
     fetch('/api/sentiment')
       .then(res => res.json())
@@ -411,23 +417,13 @@ export default function App() {
       .then(data => setInstitutionalData(data))
       .catch(console.error);
 
-    // Fetch macro data (USD/INR, VIX) from free APIs
-    fetch('https://api.exchangerate.host/latest?base=USD&symbols=INR')
+    // Fetch macro data from our API
+    fetch('/api/macro')
       .then(res => res.json())
       .then(data => {
-        if (data.rates?.INR) {
-          setMacroData(prev => ({ ...prev, usdInr: data.rates.INR }));
-        }
-      })
-      .catch(() => {});
-
-    // Fetch India VIX from NSE
-    fetch('https://nse-api-ruby.vercel.app/quote/NIFTYVIX.NS')
-      .then(res => res.json())
-      .then(data => {
-        if (data.price) {
-          setMacroData(prev => ({ ...prev, vix: parseFloat(data.price) }));
-        }
+        if (data.vix?.value) setMacroData(prev => ({ ...prev, vix: parseFloat(data.vix.value) }));
+        if (data.usdInr) setMacroData(prev => ({ ...prev, usdInr: parseFloat(data.usdInr) }));
+        if (data.correlations) setCorrelations(data.correlations);
       })
       .catch(() => {});
 
@@ -436,17 +432,71 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (data.pcr) setOrderFlow(prev => ({ ...prev, callIV: 18, putIV: parseFloat(data.pcr) * 18 }));
-        if (data.spotPrice) setMacroData(prev => ({ ...prev, vix: Math.random() * 8 + 12 }));
+      })
+      .catch(() => {});
+
+    // Fetch FII/DII for order flow delta
+    fetch('/api/institutional')
+      .then(res => res.json())
+      .then(data => {
+        const pcrVal = data.pcr || 1;
+        setOrderFlow(prev => ({ 
+          ...prev, 
+          buyDelta: Math.round((data.fii?.net || 0) / 100),
+          sellDelta: Math.round((data.dii?.net || 0) / 100),
+          callIV: parseFloat(pcrVal) > 1 ? 15 : 22,
+          putIV: parseFloat(pcrVal) < 1 ? 15 : 22
+        }));
+      })
+      .catch(() => {});
+
+    fetch('/api/levels?symbol=NIFTY')
+      .then(res => res.json())
+      .then(data => {
+        if (data.underlying) {
+          setKeyLevels({ 
+            support: data.support || 0, 
+            resistance: data.resistance || 0, 
+            pivot: data.underlying || 0,
+            maxPain: data.maxPain || 0,
+            pcr: data.pcr || '0'
+          });
+          setMacroData(prev => ({ ...prev, vix: data.pcr ? parseFloat(data.pcr) * 15 : 14 }));
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/macro')
+      .then(res => res.json())
+      .then(data => {
+        if (data.correlations) {
+          setCorrelations(data.correlations);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/levels?symbol=NIFTY')
+      .then(res => res.json())
+      .then(data => {
+        if (data.underlying) {
+          setKeyLevels({ 
+            support: data.support || 0, 
+            resistance: data.resistance || 0, 
+            pivot: data.underlying || 0,
+            maxPain: data.maxPain || 0,
+            pcr: data.pcr || '0'
+          });
+        }
       })
       .catch(() => {});
 
     // 30 second refresh for live data
     const refreshInterval = setInterval(() => {
-      fetch('https://nse-api-ruby.vercel.app/quote/NIFTYVIX.NS')
+      fetch('/api/macro')
         .then(res => res.json())
         .then(data => {
-          if (data.price) {
-            setMacroData(prev => ({ ...prev, vix: parseFloat(data.price) }));
+          if (data.vix?.value) {
+            setMacroData(prev => ({ ...prev, vix: data.vix.value }));
           }
         })
         .catch(() => {});
@@ -482,7 +532,8 @@ export default function App() {
     }).catch(err => {
       setStockInsight({ text: "Insight currently unavailable", loading: false });
     });
-  }, []);
+    return () => clearInterval(newsInterval);
+  }, [selectedStock]);
 
   const handleCopilotSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1109,10 +1160,15 @@ export default function App() {
                         <Mono className="text-lg text-white">{macroData.bondYield.toFixed(1)}%</Mono>
                         <div className="text-[9px] text-zinc-600">bond</div>
                       </div>
-                      <div className={`p-2 border rounded-xl ${macroData.vix > 16 ? 'bg-rose-900/30 border-rose-500/50' : 'bg-zinc-900/60 border-white/5'}`}>
+<div className={`p-2 border rounded-xl ${Number(macroData.vix) > 16 ? 'bg-rose-900/30 border-rose-500/50' : 'bg-zinc-900/60 border-white/5'}`}>
                         <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Activity size={10} /> India VIX</span>
-                        <Mono className={`text-lg ${macroData.vix > 16 ? 'text-rose-400' : 'text-amber-400'}`}>{macroData.vix.toFixed(1)}</Mono>
-                        <div className="text-[9px] text-amber-500">{macroData.vix > 16 ? 'Reduce 50%!' : 'Normal'}</div>
+                        <Mono className={`text-lg ${Number(macroData.vix) > 16 ? 'text-rose-400' : 'text-amber-400'}`}>{Number(macroData.vix || 14).toFixed(1)}</Mono>
+                        <div className="text-[9px] text-amber-500">{Number(macroData.vix) > 16 ? 'Reduce 50%!' : 'Normal'}</div>
+                      </div>
+                      <div className="p-2 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
+                        <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Activity size={10} /> Sentiment</span>
+                        <Mono className="text-lg text-emerald-400">{Number(macroData.vix) > 16 ? 'RISK OFF' : sentiment?.label || 'NEUTRAL'}</Mono>
+                        <div className="text-[9px] text-zinc-500">{Number(macroData.vix) > 16 ? 'Gamma scalp' : 'Normal'}</div>
                       </div>
                       <div className="p-2 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
                         <span className="text-[8px] font-black text-emerald-400 uppercase block mb-1">Regime</span>
@@ -1170,23 +1226,23 @@ export default function App() {
                         <div className="space-y-2">
                           <div className="flex justify-between p-2 bg-emerald-950/30 rounded border border-emerald-500/30">
                             <span className="text-xs text-zinc-400">Support</span>
-                            <Mono className="text-sm text-emerald-400">{'--'}</Mono>
+                            <Mono className="text-sm text-emerald-400">{keyLevels.support || '--'}</Mono>
                           </div>
                           <div className="flex justify-between p-2 bg-amber-950/30 rounded border border-amber-500/30">
                             <span className="text-xs text-zinc-400">Pivot</span>
-                            <Mono className="text-sm text-amber-400">{'--'}</Mono>
+                            <Mono className="text-sm text-amber-400">{keyLevels.pivot || '--'}</Mono>
                           </div>
                           <div className="flex justify-between p-2 bg-rose-950/30 rounded border border-rose-500/30">
                             <span className="text-xs text-zinc-400">Resistance</span>
-                            <Mono className="text-sm text-rose-400">{'--'}</Mono>
+                            <Mono className="text-sm text-rose-400">{keyLevels.resistance || '--'}</Mono>
                           </div>
                           <div className="flex justify-between p-2 bg-zinc-950 rounded mt-2 border border-white/5">
                             <span className="text-xs text-zinc-500">Max Pain</span>
-                            <Mono className="text-sm text-white">{optionsChain?.maxPain || '--'}</Mono>
+                            <Mono className="text-sm text-white">{keyLevels.maxPain || '--'}</Mono>
                           </div>
                           <div className="flex justify-between p-2 bg-zinc-950 rounded border border-white/5">
-                            <span className="text-xs text-zinc-500">Max OI Strike</span>
-                            <Mono className="text-sm text-white">{'--'}</Mono>
+                            <span className="text-xs text-zinc-500">PCR</span>
+                            <Mono className="text-sm text-white">{keyLevels.pcr || '--'}</Mono>
                           </div>
                         </div>
                       </div>
@@ -1459,7 +1515,7 @@ export default function App() {
                       <span className="tracking-tight uppercase font-black text-[10px] opacity-60">Synthesizing liquidity map...</span>
                     </div>
                   ) : (
-                    <p className="text-base text-zinc-300 leading-relaxed italic border-l-4 border-amber-500/40 pl-6">
+                    <p className="text-base text-zinc-300 leading-relaxed italic">
                       "{stockInsight.text}"
                     </p>
                   )}

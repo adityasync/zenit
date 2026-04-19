@@ -5,21 +5,22 @@ import { NextResponse } from "next/server";
 
 async function getFIIIData() {
   const sources = [
-    'https://fii-diidata.mrchartist.com/api/data',
-    'https://optionx.trade/api/fii-dii'
+    { url: 'https://fii-diidata.mrchartist.com/api/data', parser: (d: any) => d },
+    { url: 'https://optionx.trade/fii-dii-activity', parser: null },
   ];
   
-  for (const url of sources) {
+  for (const src of sources) {
     try {
-      const res = await fetch(url, { 
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(5000)
+      const res = await fetch(src.url, { 
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout(8000)
       });
       if (res.ok) {
         const data = await res.json();
-        return data;
+        return src.parser ? src.parser(data) : data;
       }
     } catch (e) {
+      console.warn('FII source failed:', src.url);
       continue;
     }
   }
@@ -56,14 +57,19 @@ export async function GET() {
         net: data.fii_net || 0, 
         buyValue: data.fii_buy || 0, 
         sellValue: data.fii_sell || 0,
-        index: 0, cash: 0, fn: 0
+        index: data.fii_idx_fut_net || 0,
+        cash: data.fii_stk_fut_net || 0,
+        fn: data.fii_idx_fut_net || 0
       },
       dii: { 
         net: data.dii_net || 0, 
         buyValue: data.dii_buy || 0, 
         sellValue: data.dii_sell || 0,
-        index: 0, cash: 0, fn: 0
+        index: data.dii_idx_fut_net || 0,
+        cash: data.dii_stk_fut_net || 0,
+        fn: data.dii_idx_fut_net || 0
       },
+      weekHistory: [],
       date,
       timestamp: Date.now(),
       status: 'live'
