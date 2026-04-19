@@ -155,7 +155,7 @@ interface StockData {
 // Fetch batch stock data from the API
 async function fetchBatchStocks(symbols: string[]): Promise<Map<string, StockData>> {
   const result = new Map<string, StockData>();
-  const chunkSize = 10;
+  const chunkSize = 15;
 
   for (let i = 0; i < symbols.length; i += chunkSize) {
     const chunk = symbols.slice(i, i + chunkSize);
@@ -177,7 +177,7 @@ async function fetchBatchStocks(symbols: string[]): Promise<Map<string, StockDat
           day_low?: number;
           previous_close?: number;
         }>;
-      }>(`/stock/list?symbols=${symList}&res=num`, 5000);
+      }>(`/stock/list?symbols=${symList}&res=num`, 3000);
 
       if (data?.stocks) {
         for (const stock of data.stocks) {
@@ -418,7 +418,7 @@ export async function GET(request: NextRequest) {
         }
         heartbeat();
         generateAll();
-      }, marketOpen ? 10000 : 60000); // 10s during market hours, 60s otherwise
+      }, marketOpen ? 5000 : 30000); // 5s during market hours, 30s otherwise
 
       request.signal.addEventListener("abort", () => {
         isConnected = false;

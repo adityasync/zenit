@@ -20,11 +20,13 @@ interface UseSSEOptions {
 export function useSSE(options: UseSSEOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<number>(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
-  const maxReconnectAttempts = 3;
-  const baseDelay = 2000;
+  const maxReconnectAttempts = 5;
+  const baseDelay = 1500;
   const isUnmountedRef = useRef(false);
   const optionsRef = useRef(options);
 
@@ -32,12 +34,51 @@ export function useSSE(options: UseSSEOptions = {}) {
     optionsRef.current = options;
   }, [options]);
 
+  const stopFallbackPolling = useCallback(() => {
+    if (fallbackIntervalRef.current) {
+      clearInterval(fallbackIntervalRef.current);
+      fallbackIntervalRef.current = null;
+    }
+  }, []);
+
+  // Client-side polling fallback when SSE is disconnected
+  const startFallbackPolling = useCallback(() => {
+    stopFallbackPolling();
+    
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/stream-poll', { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        if (data.indices) optionsRef.current.onIndexUpdate?.(data.indices);
+        if (data.breadth) optionsRef.current.onBreadthUpdate?.(data.breadth);
+        if (data.sectors) optionsRef.current.onSectorsUpdate?.(data.sectors);
+        if (data.gainers) optionsRef.current.onGainersUpdate?.(data.gainers);
+        if (data.losers) optionsRef.current.onLosersUpdate?.(data.losers);
+        if (data.screener) optionsRef.current.onScreenerUpdate?.(data.screener);
+        if (data.tickers) {
+          for (const tick of data.tickers) {
+            optionsRef.current.onTickerUpdate?.(tick);
+          }
+        }
+        setLastUpdate(Date.now());
+      } catch {
+        // silent fallback failure
+      }
+    };
+
+    poll(); // immediate first poll
+    fallbackIntervalRef.current = setInterval(poll, 8000);
+  }, [stopFallbackPolling]);
+
   const connect = useCallback(() => {
     if (typeof window === "undefined") return;
     if (isUnmountedRef.current) return;
     if (eventSourceRef.current?.readyState === EventSource.OPEN) return;
 
     setIsConnecting(true);
+    stopFallbackPolling();
 
     const eventSource = new EventSource("/api/stream");
     eventSourceRef.current = eventSource;
@@ -50,6 +91,7 @@ export function useSSE(options: UseSSEOptions = {}) {
       setIsConnected(true);
       setIsConnecting(false);
       reconnectAttempts.current = 0;
+      stopFallbackPolling();
       optionsRef.current.onConnect?.();
     });
 
@@ -58,6 +100,7 @@ export function useSSE(options: UseSSEOptions = {}) {
       try {
         const data = JSON.parse(event.data);
         optionsRef.current.onIndexUpdate?.(data);
+        setLastUpdate(Date.now());
       } catch (error) {
         console.error("Failed to parse indices:", error);
       }
@@ -139,9 +182,12 @@ export function useSSE(options: UseSSEOptions = {}) {
             connect();
           }
         }, delay);
+      } else {
+        // All SSE reconnects exhausted — fall back to HTTP polling
+        startFallbackPolling();
       }
     };
-  }, []);
+  }, [stopFallbackPolling, startFallbackPolling]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -152,9 +198,10 @@ export function useSSE(options: UseSSEOptions = {}) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    stopFallbackPolling();
     setIsConnected(false);
     setIsConnecting(false);
-  }, []);
+  }, [stopFallbackPolling]);
 
   const reconnect = useCallback(() => {
     disconnect();
@@ -174,6 +221,7 @@ export function useSSE(options: UseSSEOptions = {}) {
   return {
     isConnected,
     isConnecting,
+    lastUpdate,
     reconnect,
     disconnect,
   };

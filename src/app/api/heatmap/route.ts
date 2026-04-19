@@ -123,8 +123,8 @@ export async function GET(request: Request) {
       totalStocks: stocks.length
     };
 
-    // Cache for 5 minutes
-    CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 300000 });
+    // Cache for 60 seconds for near-realtime freshness
+    CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 60000 });
     return NextResponse.json(responseData);
   } catch (error) {
     console.error("Heatmap error:", error);

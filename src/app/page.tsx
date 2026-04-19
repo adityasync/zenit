@@ -317,7 +317,7 @@ export default function App() {
     setWatchlist(prev => prev.filter(w => w.symbol !== symbol));
   }, []);
 
-  const { isConnected, isConnecting } = useSSE({
+  const { isConnected, isConnecting, lastUpdate } = useSSE({
     onIndexUpdate: useCallback((data: IndexData[]) => {
       setIndices(data);
       setLoading(false);
@@ -381,10 +381,15 @@ export default function App() {
         .catch(() => setOptionsChain(null));
     }
     if (activeOverlay === 'heatmap') {
-      fetch(`/api/heatmap?view=${heatmapView}`)
-        .then(res => res.json())
-        .then(data => setHeatmapData(data))
-        .catch(() => setHeatmapData(null));
+      const fetchHeatmap = () => {
+        fetch(`/api/heatmap?view=${heatmapView}`)
+          .then(res => res.json())
+          .then(data => setHeatmapData(data))
+          .catch(() => setHeatmapData(null));
+      };
+      fetchHeatmap();
+      const heatmapRefresh = setInterval(fetchHeatmap, 60000);
+      return () => clearInterval(heatmapRefresh);
     }
   }, [activeOverlay, heatmapView]);
 
@@ -532,7 +537,6 @@ export default function App() {
     }).catch(err => {
       setStockInsight({ text: "Insight currently unavailable", loading: false });
     });
-    return () => clearInterval(newsInterval);
   }, [selectedStock]);
 
   const handleCopilotSubmit = useCallback(async (e?: React.FormEvent) => {
@@ -654,9 +658,14 @@ export default function App() {
             <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/5 rounded-full border border-emerald-500/10">
               <div className={`w-1 h-1 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse shadow-[0_0_4px_#10b981]' : 'bg-zinc-500'}`} />
               <span className="text-[8px] font-bold text-emerald-500/80 uppercase tracking-tighter">
-                {isConnecting ? 'SYNCING' : isConnected ? 'LIVE' : 'OFFLINE'}
+                {isConnecting ? 'SYNCING' : isConnected ? 'LIVE · 5s' : 'POLLING'}
               </span>
             </div>
+            {lastUpdate > 0 && (
+              <span className="text-[8px] font-mono text-zinc-600 tabular-nums">
+                {new Date(lastUpdate).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+              </span>
+            )}
             <button 
               onClick={() => setIsCopilotOpen(true)} 
               className="p-2 hover:bg-white/5 rounded-md text-zinc-500 hover:text-amber-500 transition-colors"
