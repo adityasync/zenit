@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
+import Script from "next/script";
 import "./globals.css";
 
 const inter = Inter({
@@ -55,6 +56,21 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icons/logo.png" />
       </head>
       <body className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
+        {/* Google tag (gtag.js) */}
+        <Script
+          async
+          src="https://www.googletagmanager.com/gtag/js?id=G-JG49CPPCZT"
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+
+            gtag('config', 'G-JG49CPPCZT');
+          `}
+        </Script>
         {children}
         <ServiceWorkerRegistration />
       </body>
