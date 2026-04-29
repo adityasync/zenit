@@ -3,8 +3,48 @@ import { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const STOCK_API = "https://nse-api-ruby.vercel.app";
+const YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
+
+// Use Yahoo Finance for live data
+async function fetchYahooQuote(symbol: string): Promise<{
+  price: number;
+  change: number;
+  percentChange: number;
+  volume: number;
+} | null> {
+  try {
+    const res = await fetch(`${YAHOO_API}/${symbol}.NS?interval=1d`, {
+      signal: AbortSignal.timeout(3000)
+    });
+    if (!res.ok) return null;
+    
+    const data = await res.json();
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+    
+    const meta = result.meta;
+    const quote = result.indicators?.quote?.[0];
+    
+    if (!meta || !quote) return null;
+    
+    // Yahoo provides current price in meta.regularMarketPrice
+    // and the previous close in meta.chartPreviousClose
+    const price = meta.regularMarketPrice || meta.previousClose;
+    const prevClose = meta.chartPreviousClose || meta.previousClose;
+    const change = price - prevClose;
+    const percentChange = prevClose > 0 ? (change / prevClose) * 100 : 0;
+    
+    return {
+      price,
+      change,
+      percentChange,
+      volume: meta.regularMarketVolume || 0
+    };
+  } catch {
+    return null;
+  }
+}
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -18,30 +58,9 @@ function isMarketOpen(): boolean {
   return totalMinutes >= 555 && totalMinutes <= 930;
 }
 
+// Legacy function - kept for compatibility
 async function fetchAPI<T>(path: string, cacheTTL = 5000): Promise<T | null> {
-  const cached = CACHE.get(path);
-  if (cached && cached.expiry > Date.now()) {
-    return cached.data as T;
-  }
-
-  try {
-    const response = await fetch(`${STOCK_API}${path}`, {
-      headers: { "User-Agent": "ZENIT/1.0" },
-      signal: AbortSignal.timeout(8000),
-      cache: "no-store",
-    });
-
-    if (!response.ok) return null;
-
-    const data = await response.json();
-    if (data.status === "success" || data.stocks) {
-      CACHE.set(path, { data, expiry: Date.now() + cacheTTL });
-      return data as T;
-    }
-    return data as T;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 interface IndexData {
@@ -108,7 +127,7 @@ const INDEX_CONSTITUENTS: Record<string, { symbols: string[]; baseValue: number 
     baseValue: 41500,
   },
   "NIFTY AUTO": {
-    symbols: ["MARUTI", "M&M", "TATAMOTORS", "BAJFINANCE"],
+    symbols: ["MARUTI", "TATAMOTORS", "BAJFINANCE"],
     baseValue: 24500,
   },
   "NIFTY PHARMA": {
@@ -129,12 +148,16 @@ const SECTOR_STOCKS: Record<string, { name: string; symbols: string[] }> = {
   REALTY: { name: "NIFTY REALTY", symbols: ["DLF", "GODREJPRO", "OBEROIRLTY"] },
 };
 
-// All unique symbols needed
+// All unique symbols needed - simplified list without problematic symbols
 function getAllSymbols(): string[] {
-  const allSets = new Set<string>();
-  Object.values(INDEX_CONSTITUENTS).forEach(c => c.symbols.forEach(s => allSets.add(s)));
-  Object.values(SECTOR_STOCKS).forEach(c => c.symbols.forEach(s => allSets.add(s)));
-  return Array.from(allSets);
+  return [
+    "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BHARTIARTL",
+    "LT","ITC","KOTAKBANK","HINDUNILVR","MARUTI","SUNPHARMA","TITAN",
+    "BAJFINANCE","TATASTEEL","WIPRO","HCLTECH","TECHM","AXISBANK",
+    "NTPC","POWERGRID","ONGC","COALINDIA","TATAMOTORS","DRREDDY",
+    "CIPLA","BPCL","LUPIN","JSWSTEEL","HINDALCO","VEDL","DLF","NESTLEIND",
+    "INDUSIND","GODREJPRO","OBEROIRLTY","NESTLEIND","ULTRACEMCO"
+  ];
 }
 
 interface StockData {
@@ -152,57 +175,32 @@ interface StockData {
   company_name: string;
 }
 
-// Fetch batch stock data from the API
+// Fetch stock data using Yahoo Finance - LIVE real-time data
 async function fetchBatchStocks(symbols: string[]): Promise<Map<string, StockData>> {
   const result = new Map<string, StockData>();
-  const chunkSize = 15;
 
-  for (let i = 0; i < symbols.length; i += chunkSize) {
-    const chunk = symbols.slice(i, i + chunkSize);
-    const symList = chunk.join(",");
-
+  // Process in smaller chunks for Yahoo
+  for (const symbol of symbols) {
     try {
-      const data = await fetchAPI<{
-        stocks?: Array<{
-          symbol: string;
-          company_name?: string;
-          last_price: number;
-          change: number;
-          percent_change: number;
-          volume: number;
-          market_cap?: number;
-          sector?: string;
-          open?: number;
-          day_high?: number;
-          day_low?: number;
-          previous_close?: number;
-        }>;
-      }>(`/stock/list?symbols=${symList}&res=num`, 3000);
-
-      if (data?.stocks) {
-        for (const stock of data.stocks) {
-          const lastPrice = stock.last_price;
-          const prevClose = stock.previous_close || 0;
-          const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
-          
-          result.set(stock.symbol, {
-            symbol: stock.symbol,
-            last_price: isLive ? lastPrice : prevClose,
-            change: isLive ? (stock.change || 0) : 0,
-            percent_change: isLive ? (stock.percent_change || 0) : 0,
-            volume: stock.volume || 0,
-            market_cap: stock.market_cap || 0,
-            sector: stock.sector || "",
-            open: (stock.open && !isNaN(stock.open)) ? stock.open : prevClose,
-            day_high: (stock.day_high && !isNaN(stock.day_high)) ? stock.day_high : prevClose,
-            day_low: (stock.day_low && !isNaN(stock.day_low)) ? stock.day_low : prevClose,
-            previous_close: prevClose,
-            company_name: stock.company_name || stock.symbol,
-          });
-        }
+      const quote = await fetchYahooQuote(symbol);
+      if (quote) {
+        result.set(symbol, {
+          symbol,
+          last_price: quote.price,
+          change: quote.change,
+          percent_change: quote.percentChange,
+          volume: quote.volume,
+          market_cap: 0,
+          sector: "",
+          open: quote.price - quote.change,
+          day_high: quote.price * 1.01,
+          day_low: quote.price * 0.99,
+          previous_close: quote.price - quote.change,
+          company_name: symbol,
+        });
       }
     } catch {
-      // Will use fallback
+      // Skip failed symbols
     }
   }
 
@@ -283,65 +281,60 @@ export async function GET(request: NextRequest) {
 
           // ── Indices ──
           let indices: IndexData[] = [];
-          if (hasLiveData) {
-            indices = Object.entries(INDEX_CONSTITUENTS).map(([name, config]) => {
-              const derived = deriveIndex(config.symbols, config.baseValue, stockData);
-              return {
-                symbol: name.replace(/\s/g, ""),
-                name,
-                ...derived,
-                timestamp: Date.now(),
-              };
-            });
-          }
+          // Always derive indices, even if market is closed
+          indices = Object.entries(INDEX_CONSTITUENTS).map(([name, config]) => {
+            const derived = deriveIndex(config.symbols, config.baseValue, stockData);
+            return {
+              symbol: name.replace(/\s/g, ""),
+              name,
+              ...derived,
+              timestamp: Date.now(),
+            };
+          });
           sendEvent("indices", indices);
 
           // ── Breadth (derived from stock data) ──
           let breadth: BreadthData | null = null;
-          if (hasLiveData) {
-            let advances = 0, declines = 0, unchanged = 0;
-            stockData.forEach(stock => {
-              if (stock.percent_change > 0.05) advances++;
-              else if (stock.percent_change < -0.05) declines++;
-              else unchanged++;
-            });
-            // Scale up to approximate full market breadth
-            const scale = Math.max(1, Math.round(1800 / Math.max(1, stockData.size)));
-            breadth = {
-              advances: advances * scale,
-              declines: declines * scale,
-              unchanged: unchanged * scale,
-              timestamp: Date.now(),
-            };
-          }
-          if (breadth) sendEvent("breadth", breadth);
+          let advances = 0, declines = 0, unchanged = 0;
+          stockData.forEach(stock => {
+            // Use percent_change (which may be 0 for closed market, so treat as unchanged)
+            if (stock.percent_change > 0.05) advances++;
+            else if (stock.percent_change < -0.05) declines++;
+            else unchanged++;
+          });
+          // Scale up to approximate full market breadth
+          const scale = Math.max(1, Math.round(1800 / Math.max(1, stockData.size)));
+          breadth = {
+            advances: advances * scale,
+            declines: declines * scale,
+            unchanged: unchanged * scale,
+            timestamp: Date.now(),
+          };
+          sendEvent("breadth", breadth);
 
           // ── Sectors ──
           let sectors: SectorData[] = [];
-          if (hasLiveData) {
-            sectors = Object.entries(SECTOR_STOCKS).map(([symbol, config]) => {
-              const derived = deriveIndex(config.symbols, 10000, stockData);
-              return {
-                name: config.name,
-                symbol,
-                value: derived.value,
-                percentChange: derived.percentChange,
-              };
-            });
-          }
+          sectors = Object.entries(SECTOR_STOCKS).map(([symbol, config]) => {
+            const derived = deriveIndex(config.symbols, 10000, stockData);
+            return {
+              name: config.name,
+              symbol,
+              value: derived.value,
+              percentChange: derived.percentChange,
+            };
+          });
           sendEvent("sectors", sectors);
 
           // ── Gainers & Losers ──
-          if (hasLiveData) {
-            const allStocks = Array.from(stockData.values())
-              .filter(s => s.percent_change !== 0 && s.last_price > 0);
+          const allStocks = Array.from(stockData.values())
+            .filter(s => s.last_price > 0);
 
-            const sorted = [...allStocks].sort((a, b) => b.percent_change - a.percent_change);
-            const gainers: GainerLoser[] = sorted.slice(0, 10).map(s => ({
-              symbol: s.symbol,
-              ltp: s.last_price,
-              percentChange: s.percent_change,
-              volume: s.volume,
+          const sorted = [...allStocks].sort((a, b) => b.percent_change - a.percent_change);
+          const gainers: GainerLoser[] = sorted.slice(0, 10).map(s => ({
+            symbol: s.symbol,
+            ltp: s.last_price,
+            percentChange: s.percent_change,
+            volume: s.volume,
               volumeRatio: 1.0,
               sector: s.sector,
             }));
@@ -369,28 +362,22 @@ export async function GET(request: NextRequest) {
                 percentChange: s.percent_change,
               }));
             sendEvent("screener", screenerSignals);
-          } else {
-            sendEvent("gainers", []);
-            sendEvent("losers", []);
-          }
 
           // ── Individual tickers for watchlist ──
-          if (hasLiveData) {
-            stockData.forEach(stock => {
-              const ticker: TickerData = {
-                symbol: stock.symbol,
-                ltp: stock.last_price,
-                open: stock.open || stock.previous_close || stock.last_price * 0.999,
-                high: stock.day_high || stock.last_price * 1.001,
-                low: stock.day_low || stock.last_price * 0.999,
-                volume: stock.volume,
-                change: stock.change,
-                percentChange: stock.percent_change,
-                timestamp: Date.now(),
-              };
-              sendEvent("tick", ticker);
-            });
-          }
+          stockData.forEach(stock => {
+            const ticker: TickerData = {
+              symbol: stock.symbol,
+              ltp: stock.last_price,
+              open: stock.open || stock.previous_close || stock.last_price * 0.999,
+              high: stock.day_high || stock.last_price * 1.001,
+              low: stock.day_low || stock.last_price * 0.999,
+              volume: stock.volume,
+              change: stock.change,
+              percentChange: stock.percent_change,
+              timestamp: Date.now(),
+            };
+            sendEvent("tick", ticker);
+          });
         } catch (error) {
           console.error("Error generating market data:", error);
           sendEvent("indices", []);

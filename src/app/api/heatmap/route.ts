@@ -1,88 +1,72 @@
 import { NextResponse } from "next/server";
 
-const NSE_API = "https://nse-api-ruby.vercel.app";
+const YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
 const SECTOR_MAPPINGS: Record<string, string[]> = {
-  'IT': ['TCS','INFY','WIPRO','HCLTECH','TECHM','INFOYS','MPHASIS','Mindtree','LTI','COGNIZANT'],
-  'BFSI': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND','BANKBARODA','FEDERALBNK','YESBANK','RBLBANK','AUBAND','BANDHANBNK'],
-  'AUTO': ['MARUTI','M&M','TATAMOTORS','BAJFINANCE','HEROMOTOCO','EXIDEIND','BHARATPETROL'],
-  'PHARMA': ['SUNPHARMA','DRREDDY','CIPLA','LUPIN','APOLLOHOSP','METROBRAND','GLAND','SEQUOIA'],
-  'FMCG': ['HINDUNILVR','ITC','NESTLEIND','TITAN','COLGATE','DABUR','BRITANIA','MARICO'],
-  'METAL': ['TATASTEEL','HINDALCO','JSWSTEEL','SAIL','NMDC','VEDL','COALINDIA','ANUPANCHI'],
-  'ENERGY': ['RELIANCE','ONGC','BPCL','IOC','GAIL','CPCBRL','COFORGE','OIL','GUASOIL'],
-  'REALTY': ['DLF','GODREJPRO','OBEROIRLTY','BRADAGEO','PERSISTENT','PHOENIXLTM']
+  'IT': ['TCS','INFY','WIPRO','HCLTECH','TECHM'],
+  'BFSI': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND'],
+  'AUTO': ['MARUTI','TATAMOTORS','BAJFINANCE'],
+  'PHARMA': ['SUNPHARMA','DRREDDY','CIPLA','LUPIN'],
+  'FMCG': ['HINDUNILVR','ITC','NESTLEIND','TITAN'],
+  'METAL': ['TATASTEEL','HINDALCO','JSWSTEEL','VEDL','COALINDIA'],
+  'ENERGY': ['RELIANCE','ONGC','BPCL','NTPC','POWERGRID'],
+  'REALTY': ['DLF','GODREJPRO','OBEROIRLTY']
 };
 
 const INDEX_STOCKS: Record<string, string[]> = {
-  'Nifty 50': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL','WIPRO','M&M','NESTLEIND','ULTRACEMCO','ADANIENT','SBILIFE','AXISBANK','ASIANPAINT','HCLTECH','ADANIPORTS','COALINDIA','TATAMOTORS','BAJAJFINSV','DRREDDY','ONGC','CIPLA','BPCL','NTPC','POWERGRID','GRASIM','DIVISLAB','JSWSTEEL','ADANIGREEN','HAL','ZOMATO'],
-  'nifty50': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL','WIPRO','M&M','NESTLEIND','ULTRACEMCO','ADANIENT','SBILIFE','AXISBANK','ASIANPAINT','HCLTECH','ADANIPORTS','COALINDIA','TATAMOTORS','BAJAJFINSV','DRREDDY','ONGC','CIPLA','BPCL','NTPC','POWERGRID','GRASIM','DIVISLAB','JSWSTEEL','ADANIGREEN','HAL','ZOMATO'],
-  'Bank Nifty': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND','FEDERALBNK','YESBANK','RBLBANK','BANDHANBNK'],
-  'banknifty': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND','FEDERALBNK','YESBANK','RBLBANK','BANDHANBNK'],
-  'Sensex': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL'],
+  'nifty50': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL','WIPRO','HCLTECH'],
+  'banknifty': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND'],
   'sensex': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL'],
 };
 
-async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const res = await fetch(url, options);
-      if (res.ok) return res;
-    } catch (err) {
-      if (attempt === retries - 1) throw err;
-    }
-    if (attempt < retries - 1) {
-      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
-    }
+async function fetchYahooQuote(symbol: string): Promise<any> {
+  try {
+    const res = await fetch(`${YAHOO_API}/${symbol}.NS?interval=1d`, {
+      signal: AbortSignal.timeout(3000)
+    });
+    if (!res.ok) return null;
+    
+    const data = await res.json();
+    const result = data.chart?.result?.[0];
+    if (!result) return null;
+    
+    const meta = result.meta;
+    const quote = result.indicators?.quote?.[0];
+    if (!meta || !quote) return null;
+    
+    const price = meta.regularMarketPrice || meta.previousClose;
+    const prevClose = meta.chartPreviousClose || meta.previousClose;
+    const change = price - prevClose;
+    const percentChange = prevClose > 0 ? (change / prevClose) * 100 : 0;
+    
+    return {
+      symbol,
+      last_price: price,
+      previous_close: prevClose,
+      change,
+      percent_change: percentChange,
+      volume: meta.regularMarketVolume || 0,
+      market_cap: 0,
+      sector: '',
+      company_name: meta.shortName || symbol
+    };
+  } catch {
+    return null;
   }
-  throw new Error('All retries failed');
 }
 
 async function fetchBatchQuotes(symbols: string[]): Promise<any[]> {
-  const chunkSize = 5;
-  const chunks: string[][] = [];
+  const results: any[] = [];
   
-  for (let i = 0; i < symbols.length; i += chunkSize) {
-    chunks.push(symbols.slice(i, i + chunkSize));
-  }
-
-  const flatResults: any[] = [];
-
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    try {
-      const symList = chunk.join(',');
-      const res = await fetchWithRetry(
-        `${NSE_API}/stock/list?symbols=${symList}&res=num`,
-        { signal: AbortSignal.timeout(45000) },
-        3
-      );
-      const data = await res.json();
-      
-      if (data.stocks) {
-        for (const stock of data.stocks) {
-          const lastPrice = stock.last_price;
-          const prevClose = stock.previous_close || 0;
-          const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
-          
-          flatResults.push({
-            ...stock,
-            last_price: isLive ? lastPrice : prevClose,
-            percent_change: isLive ? stock.percent_change : 0,
-            isDelayed: !isLive,
-          });
-        }
-      }
-    } catch (err) {
-      console.error(`Heatmap chunk fetch failed for ${chunk.join(',')}`, err);
-    }
-
-    if (i < chunks.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 800));
+  for (const symbol of symbols) {
+    const quote = await fetchYahooQuote(symbol);
+    if (quote) {
+      results.push(quote);
     }
   }
   
-  return flatResults;
+  return results;
 }
 
 export async function GET(request: Request) {
@@ -93,7 +77,6 @@ export async function GET(request: Request) {
   const cacheKey = `heatmap:${view}`;
   const cached = CACHE.get(cacheKey);
 
-  // Stale-While-Revalidate pattern: Refresh in background if slightly stale
   if (!forceRefresh && cached && cached.expiry > Date.now()) {
     return NextResponse.json(cached.data);
   }
@@ -106,9 +89,9 @@ export async function GET(request: Request) {
       const allSymbols = Object.values(SECTOR_MAPPINGS).flat();
       stocks = await fetchBatchQuotes(allSymbols);
       
-      Object.entries(SECTOR_MAPPINGS).forEach(([sector, symbols]) => {
+      for (const [sector, symbols] of Object.entries(SECTOR_MAPPINGS)) {
         groups[sector] = stocks.filter(s => symbols.includes(s.symbol));
-      });
+      }
     } else {
       const symbols = INDEX_STOCKS[view] || INDEX_STOCKS['nifty50'];
       stocks = await fetchBatchQuotes(symbols);
@@ -123,12 +106,10 @@ export async function GET(request: Request) {
       totalStocks: stocks.length
     };
 
-    // Cache for 60 seconds for near-realtime freshness
-    CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 60000 });
+    CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 30000 });
     return NextResponse.json(responseData);
   } catch (error) {
     console.error("Heatmap error:", error);
-    // Return stale data on error if available
     if (cached) {
        return NextResponse.json(cached.data);
     }

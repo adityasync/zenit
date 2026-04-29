@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const STOCK_API = "https://nse-api-ruby.vercel.app";
+const STOCK_API = "http://65.0.104.9";
 const YAHOO_FINANCE_API = "https://query1.finance.yahoo.com/v8/finance/chart";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
@@ -30,7 +30,7 @@ async function fetchCurrentPrice(symbol: string): Promise<{ price: number; isDel
       if (data.status === "success" && data.data) {
         const lastPrice = data.data.last_price;
         const prevClose = data.data.previous_close || 0;
-        const isLive = typeof lastPrice === 'number' && !isNaN(lastPrice);
+        const isLive = typeof lastPrice === 'number' && lastPrice !== null && !isNaN(lastPrice);
         const price = isLive ? lastPrice : prevClose;
         CACHE.set(cacheKey, { data: { price, isDelayed: !isLive }, expiry: Date.now() + 60000 });
         return { price, isDelayed: !isLive };
