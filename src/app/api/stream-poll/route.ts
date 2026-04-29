@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const STOCK_API = "https://nse-api-ruby.vercel.app";
+const STOCK_API = "http://65.0.104.9";
 
 const SYMBOLS = [
   "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL",
@@ -58,7 +58,7 @@ interface StockData {
 // Lightweight endpoint for client-side polling fallback
 export async function GET() {
   try {
-    const symList = SYMBOLS.join(",");
+    const symList = SYMBOLS.map(s => s.includes('&') ? s.replace('&', '%26') : s).join(",");
     const res = await fetch(`${STOCK_API}/stock/list?symbols=${symList}&res=num`, {
       signal: AbortSignal.timeout(8000),
       cache: "no-store",
@@ -73,18 +73,20 @@ export async function GET() {
     const stockMap = new Map<string, StockData>();
 
     for (const s of stocks) {
-      const isLive = typeof s.last_price === "number" && !isNaN(s.last_price);
+      const lastPrice = s.last_price;
+      const prevClose = s.previous_close || 0;
+      const isLive = typeof lastPrice === 'number' && lastPrice !== null && !isNaN(lastPrice);
       stockMap.set(s.symbol, {
         symbol: s.symbol,
-        last_price: isLive ? s.last_price : (s.previous_close || 0),
+        last_price: isLive ? s.last_price : prevClose,
         change: isLive ? (s.change || 0) : 0,
         percent_change: isLive ? (s.percent_change || 0) : 0,
         volume: s.volume || 0,
         sector: s.sector || "",
-        open: s.open || s.previous_close || 0,
+        open: s.open || prevClose,
         day_high: s.day_high || s.last_price || 0,
         day_low: s.day_low || s.last_price || 0,
-        previous_close: s.previous_close || 0,
+        previous_close: prevClose,
       });
     }
 
