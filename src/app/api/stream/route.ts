@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { getMarketNews } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -362,6 +363,14 @@ export async function GET(request: NextRequest) {
                 percentChange: s.percent_change,
               }));
             sendEvent("screener", screenerSignals);
+
+           // ── News (more frequent during market hours) ──
+           try {
+             const news = await getMarketNews({ limit: 15 });
+             sendEvent("news", news);
+           } catch (e) {
+             console.error("News fetch error:", e);
+           }
 
           // ── Individual tickers for watchlist ──
           stockData.forEach(stock => {

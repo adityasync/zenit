@@ -35,7 +35,15 @@ const FEED_SOURCES = [
   { name: "Business Standard", url: "https://www.business-standard.com/rss/markets-106.rss", weight: 16 },
   { name: "Financial Express", url: "https://www.financialexpress.com/market/rss/", weight: 14 },
   { name: "Livemint", url: "https://www.livemint.com/rss/markets", weight: 16 },
+  { name: "Pulse", url: "https://pulse.zerodha.com/", weight: 22 },
 ] as const;
+
+const PULSE_SELECTORS = {
+  title: /<h2[^>]*>([^<]+)<\/h2>/gi,
+  desc: /<p[^>]*>([^<]+(?:<[^>]*>[^<]*)*)<\/p>/gi,
+  time: /(\d+(?:\.\d+)?)\s*(hours?|minutes?)\s*ago/gi,
+  link: /<a[^>]+href=["']([^"']+)["'][^>]*>/i,
+};
 
 const INDIA_MARKET_KEYWORDS = [
   "india", "indian", "nse", "bse", "sensex", "nifty", "bank nifty", "rupee",
@@ -103,8 +111,28 @@ const SYMBOL_ALIASES: Record<string, string[]> = {
   SENSEX: ["sensex"],
 };
 
-const CACHE_TTL_SECONDS = 20;
+function isMarketOpen(): boolean {
+  const now = new Date();
+  const utcHours = now.getUTCHours();
+  const utcMinutes = now.getUTCMinutes();
+  const istMinutes = utcHours * 60 + utcMinutes + 330; // IST = UTC + 5:30
+  const istHour = Math.floor(istMinutes / 60) % 24;
+  const istMin = istMinutes % 60;
+  const totalMinutes = istHour * 60 + istMin;
+  const day = now.getUTCDay();
+  if (day === 0 || day === 6) return false; // Weekend
+  return totalMinutes >= 555 && totalMinutes <= 930; // 9:15 AM to 3:30 PM IST
+}
+
+const MARKET_CACHE_TTL = 10;  // 10 seconds during market hours
+const OFFHOURS_CACHE_TTL = 20; // 20 seconds outside market hours
 const MEMORY_CACHE = new Map<string, { expiry: number; data: MarketNewsItem[] }>();
+const CACHE_TTL_SECONDS = 20; // Keep for backward compatibility
+
+export function clearNewsCache(): void {
+  MEMORY_CACHE.clear();
+  console.log("News cache cleared");
+}
 
 function decodeHtml(text: string): string {
   return text
@@ -171,7 +199,76 @@ function scoreNews(item: Omit<MarketNewsItem, "priority">, requestedSymbol?: str
   return Math.round(sourceScore + ageScore + indiaScore + filingScore + companyScore + requestedBoost + globalPenalty);
 }
 
+async function fetchPulse(): Promise<MarketNewsItem[]> {
+  try {
+    const res = await fetch("https://pulse.zerodha.com/", {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+
+    const html = await res.text();
+    const items: MarketNewsItem[] = [];
+
+    // Match: <li class="box item"> ... </li>
+    const itemRegex = /<li class="box item"[^>]*>([\s\S]*?)<\/li>/gi;
+    let itemMatch;
+
+    while ((itemMatch = itemRegex.exec(html)) !== null && items.length < 25) {
+      const itemHtml = itemMatch[1];
+
+      // Extract title and link from <h2 class="title"><a ...>Title</a></h2>
+      const titleMatch = itemHtml.match(/<h2 class="title"><a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a><\/h2>/i);
+      if (!titleMatch) continue;
+
+      const link = titleMatch[1];
+      const title = decodeHtml(titleMatch[2]);
+
+      // Extract description from <div class="desc">...</div>
+      const descMatch = itemHtml.match(/<div class="desc">([\s\S]*?)<\/div>/i);
+      const headline = descMatch ? decodeHtml(descMatch[1]) : title;
+
+      // Extract timestamp from <span class="date" ...>X hours ago</span>
+      const timeMatch = itemHtml.match(/<span class="date"[^>]*>(\d+(?:\.\d+)?)\s*(hours?|minutes?)\s*ago<\/span>/i);
+      
+      const timeNum = timeMatch ? parseFloat(timeMatch[1]) : 60;
+      const isHour = timeMatch ? timeMatch[2].toLowerCase().startsWith("hour") : false;
+      const timestamp = Date.now() - (isHour ? timeNum * 3600000 : timeNum * 60000);
+
+      const symbols = detectSymbols(`${title} ${headline}`);
+      const type = classifyNews(`${title} ${headline}`, symbols);
+
+      const base = {
+        id: hashId("Pulse", title, link),
+        title,
+        headline,
+        link,
+        url: link,
+        source: "Pulse",
+        timestamp,
+        pubDate: timeMatch ? `${timeMatch[1]} ${timeMatch[2]} ago` : "recently",
+        symbols,
+        type,
+      };
+
+      items.push({
+        ...base,
+        priority: scoreNews(base),
+      });
+    }
+
+    return items.filter((item) => item.title.length > 10);
+  } catch (err) {
+    console.error("Pulse fetch error:", err);
+    return [];
+  }
+}
+
 async function fetchFeed(source: (typeof FEED_SOURCES)[number]): Promise<MarketNewsItem[]> {
+  if (source.name === "Pulse") {
+    return fetchPulse();
+  }
+
   try {
     const feed = await parser.parseURL(source.url);
     return (feed.items || [])
@@ -207,21 +304,31 @@ async function fetchFeed(source: (typeof FEED_SOURCES)[number]): Promise<MarketN
   }
 }
 
+function getCacheTTL(): number {
+  return isMarketOpen() ? MARKET_CACHE_TTL : OFFHOURS_CACHE_TTL;
+}
+
 async function getPooledNews(): Promise<MarketNewsItem[]> {
+  const cacheTTL = getCacheTTL();
+  const marketOpen = isMarketOpen();
+  
   const memoryHit = MEMORY_CACHE.get("latest");
   if (memoryHit && memoryHit.expiry > Date.now()) {
+    console.log(`News cache hit (memory): ${memoryHit.data.length} items, expires in ${Math.round((memoryHit.expiry - Date.now())/1000)}s`);
     return memoryHit.data;
   }
 
   const redisHit = await getCachedData<MarketNewsItem[]>("news:latest:pool");
   if (redisHit && redisHit.length > 0) {
+    console.log(`News cache hit (Redis): ${redisHit.length} items`);
     MEMORY_CACHE.set("latest", {
       data: redisHit,
-      expiry: Date.now() + CACHE_TTL_SECONDS * 1000,
+      expiry: Date.now() + cacheTTL * 1000,
     });
     return redisHit;
   }
 
+  console.log(`News cache miss - fetching fresh data (market open: ${marketOpen}, TTL: ${cacheTTL}s)`);
   const fetched = await Promise.all(FEED_SOURCES.map(fetchFeed));
   const deduped = new Map<string, MarketNewsItem>();
 
@@ -240,10 +347,10 @@ async function getPooledNews(): Promise<MarketNewsItem[]> {
 
   MEMORY_CACHE.set("latest", {
     data: ranked,
-    expiry: Date.now() + CACHE_TTL_SECONDS * 1000,
+    expiry: Date.now() + cacheTTL * 1000,
   });
 
-  await setCachedData("news:latest:pool", ranked, CACHE_TTL_SECONDS);
+  await setCachedData("news:latest:pool", ranked, cacheTTL);
   return ranked;
 }
 

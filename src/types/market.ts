@@ -66,11 +66,16 @@ export interface OptionsChain {
 export interface NewsItem {
   id: string;
   headline: string;
+  title?: string;
   summary?: string;
   source: string;
   url: string;
+  link?: string;
   timestamp: number;
+  pubDate?: string;
   symbols?: string[];
+  type?: string;
+  priority?: number;
 }
 
 export interface SentimentData {
