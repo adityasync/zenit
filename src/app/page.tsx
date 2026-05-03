@@ -47,6 +47,8 @@ import { useSSE } from "@/hooks/useSSE";
 import { MobileNav, MobileTab } from "@/components/mobile-nav";
 import type { IndexData, StockQuote, MarketBreadth, GainerLoser, SectorData, SentimentData } from "@/types/market";
 import type { LucideIcon } from "lucide-react";
+import { getLotSize, isFOStock, toLots, fromLots } from "@/lib/fo-lots";
+import type { PaperTradeOrder } from "@/types/market";
 
 const WATCHLIST_KEY = "zenit:watchlist";
 
@@ -211,7 +213,12 @@ export default function App() {
   const [chartSymbol, setChartSymbol] = useState<string>("");
 
   const [balance, setBalance] = useState(100000);
-  const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number; currentPrice: number; }[]>([]);
+  const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number; currentPrice: number; lotSize?: number; }[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<PaperTradeOrder[]>([]);
+  const [orderType, setOrderType] = useState<"market" | "limit" | "stop-loss" | "target">("market");
+  const [limitPrice, setLimitPrice] = useState<string>("");
+  const [stopLossPrice, setStopLossPrice] = useState<string>("");
+  const [useLots, setUseLots] = useState<boolean>(false);
   const [tradeQty, setTradeQty] = useState<string>("10");
   const [screenerSignals, setScreenerSignals] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<{ symbol: string; targetPrice: number; condition: 'above' | 'below'; triggered: boolean }[]>([]);
@@ -222,6 +229,62 @@ export default function App() {
   const [orderFlow, setOrderFlow] = useState({ buyDelta: 0, sellDelta: 0, callIV: 0, putIV: 0 });
   const [correlations, setCorrelations] = useState({ itNasdaq: 0, itUsd: 0, bankYield: 0, vixNifty: 0 });
   const [keyLevels, setKeyLevels] = useState({ support: 0, resistance: 0, pivot: 0, maxPain: 0, pcr: '0' });
+
+  // Export functions
+  const exportWatchlist = useCallback(async () => {
+    try {
+      const response = await fetch('/api/export/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ watchlist, positions }),
+      });
+      if (!response.ok) throw new Error('Export failed');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `zennit-watchlist-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export watchlist error:', error);
+      alert('Failed to export watchlist');
+    }
+  }, [watchlist, positions]);
+
+  const exportFIIDIIData = useCallback(async (days: number = 30) => {
+    try {
+      const response = await fetch(`/api/export/fii-dii?days=${days}`);
+      if (!response.ok) throw new Error('Export failed');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `zennit-fii-dii-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export FII/DII error:', error);
+      alert('Failed to export FII/DII data');
+    }
+  }, []);
+
+  const exportStockHistory = useCallback(async (symbol: string, range: string = '1mo', interval: string = '1d') => {
+    try {
+      const response = await fetch(`/api/export/stock-history?symbol=${symbol}&range=${range}&interval=${interval}`);
+      if (!response.ok) throw new Error('Export failed');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `zennit-${symbol}-${range}-${interval}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export stock history error:', error);
+      alert('Failed to export stock history');
+    }
+  }, []);
   
   // Startup loading handled via state, no automatic initialization
 
@@ -326,14 +389,87 @@ export default function App() {
       setBreadth(data);
     }, []),
     onTickerUpdate: useCallback((data: StockQuote) => {
-      setWatchlist(prev => prev.map(w => 
-        w.symbol === data.symbol 
+      setWatchlist(prev => prev.map(w =>
+        w.symbol === data.symbol
           ? { ...w, ltp: data.ltp, change: data.change, percentChange: data.percentChange, volume: data.volume, timestamp: Date.now() }
           : w
       ));
-      setPositions(prev => prev.map(p => 
+      setPositions(prev => prev.map(p =>
         p.symbol === data.symbol ? { ...p, currentPrice: data.ltp } : p
       ));
+
+      // Check and execute pending orders
+      setPendingOrders(prevOrders => {
+        const executed: PaperTradeOrder[] = [];
+        const remaining: PaperTradeOrder[] = [];
+
+        for (const order of prevOrders) {
+          if (order.status !== "pending") {
+            remaining.push(order);
+            continue;
+          }
+
+          // Check if order should be triggered
+          let shouldTrigger = false;
+          if (order.orderType === "stop-loss" && order.triggerPrice) {
+            // Stop-loss: sell when price falls below trigger
+            if (order.type === "sell" && data.ltp <= order.triggerPrice) shouldTrigger = true;
+            // Stop-loss: buy when price rises above trigger (for short positions)
+            if (order.type === "buy" && data.ltp >= order.triggerPrice) shouldTrigger = true;
+          }
+          if (order.orderType === "target" && order.price) {
+            // Target: sell when price rises above target
+            if (order.type === "sell" && data.ltp >= order.price) shouldTrigger = true;
+            // Target: buy when price falls below target
+            if (order.type === "buy" && data.ltp <= order.price) shouldTrigger = true;
+          }
+
+          if (shouldTrigger) {
+            // Execute the order
+            const qty = order.quantity;
+            const price = data.ltp;
+            const value = qty * price;
+
+            if (order.type === "buy") {
+              setBalance(b => b - value);
+              setPositions(prev => {
+                const existing = prev.find(p => p.symbol === order.symbol);
+                if (existing) {
+                  const newAvg = ((existing.quantity * existing.avgPrice) + value) / (existing.quantity + qty);
+                  return prev.map(p => p.symbol === order.symbol ? { ...p, quantity: p.quantity + qty, avgPrice: newAvg } : p);
+                } else {
+                  return [...prev, { symbol: order.symbol, quantity: qty, avgPrice: price, currentPrice: price, lotSize: order.lotSize }];
+                }
+              });
+            } else {
+              setBalance(b => b + value);
+              setPositions(prev => {
+                const existing = prev.find(p => p.symbol === order.symbol);
+                if (existing && existing.quantity === qty) {
+                  return prev.filter(p => p.symbol !== order.symbol);
+                } else if (existing) {
+                  return prev.map(p => p.symbol === order.symbol ? { ...p, quantity: p.quantity - qty } : p);
+                }
+                return prev;
+              });
+            }
+
+            executed.push({ ...order, status: "executed", executedPrice: price, executedAt: Date.now() });
+
+            // Show notification
+            if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+              new Notification(`Order Executed: ${order.symbol}`, {
+                body: `${order.type.toUpperCase()} ${qty} @ ₹${price.toFixed(2)}`,
+              });
+            }
+          } else {
+            remaining.push(order);
+          }
+        }
+
+        return remaining;
+      });
+
       // Check price alerts
       setAlerts(prev => prev.map(alert => {
         if (alert.triggered || alert.symbol !== data.symbol) return alert;
@@ -559,41 +695,77 @@ export default function App() {
 
   const executeTrade = useCallback((action: 'BUY' | 'SELL') => {
     if (!selectedStock) return;
-    const qty = parseInt(tradeQty);
-    if (isNaN(qty) || qty <= 0) return;
-    const value = qty * selectedStock.ltp;
-    
-    if (action === 'BUY' && balance < value) {
-      alert("Insufficient Capital!");
-      return;
+
+    // Determine quantity based on lot size or direct input
+    let qty: number;
+    if (useLots) {
+      const lots = parseInt(tradeQty);
+      if (isNaN(lots) || lots <= 0) return;
+      const lotSize = getLotSize(selectedStock.symbol);
+      qty = fromLots(lots, selectedStock.symbol);
+    } else {
+      qty = parseInt(tradeQty);
+      if (isNaN(qty) || qty <= 0) return;
     }
-    
-    setPositions(prev => {
-      const existing = prev.find(p => p.symbol === selectedStock.symbol);
-      let newPositions = [...prev];
-      if (action === 'BUY') {
-        setBalance(b => b - value);
-        if (existing) {
-          const newAvg = ((existing.quantity * existing.avgPrice) + value) / (existing.quantity + qty);
-          newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity + qty, avgPrice: newAvg } : p);
-        } else {
-          newPositions.push({ symbol: selectedStock.symbol, quantity: qty, avgPrice: selectedStock.ltp, currentPrice: selectedStock.ltp });
-        }
-      } else {
-        if (!existing || existing.quantity < qty) {
-          alert("Insufficient shares to sell!");
-          return prev;
-        }
-        setBalance(b => b + value);
-        if (existing.quantity === qty) {
-          newPositions = newPositions.filter(p => p.symbol !== selectedStock.symbol);
-        } else {
-          newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity - qty } : p);
-        }
+
+    const orderPrice = orderType === "limit" && limitPrice ? parseFloat(limitPrice) : selectedStock.ltp;
+    const value = qty * orderPrice;
+
+    // For market and limit orders, execute immediately
+    if (orderType === "market" || orderType === "limit") {
+      if (action === 'BUY' && balance < value) {
+        alert("Insufficient Capital!");
+        return;
       }
-      return newPositions;
-    });
-  }, [selectedStock, tradeQty, balance]);
+
+      setPositions(prev => {
+        const existing = prev.find(p => p.symbol === selectedStock.symbol);
+        let newPositions = [...prev];
+        if (action === 'BUY') {
+          setBalance(b => b - value);
+          if (existing) {
+            const newAvg = ((existing.quantity * existing.avgPrice) + value) / (existing.quantity + qty);
+            newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity + qty, avgPrice: newAvg, lotSize: getLotSize(selectedStock.symbol) } : p);
+          } else {
+            newPositions.push({ symbol: selectedStock.symbol, quantity: qty, avgPrice: orderPrice, currentPrice: selectedStock.ltp, lotSize: getLotSize(selectedStock.symbol) });
+          }
+        } else {
+          if (!existing || existing.quantity < qty) {
+            alert("Insufficient shares to sell!");
+            return prev;
+          }
+          setBalance(b => b + value);
+          if (existing.quantity === qty) {
+            newPositions = newPositions.filter(p => p.symbol !== selectedStock.symbol);
+          } else {
+            newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity - qty } : p);
+          }
+        }
+        return newPositions;
+      });
+    }
+
+    // For stop-loss and target orders, add to pending orders
+    if ((orderType === "stop-loss" || orderType === "target") && stopLossPrice) {
+      const triggerPrice = parseFloat(stopLossPrice);
+      if (isNaN(triggerPrice) || triggerPrice <= 0) return;
+
+      const newOrder: PaperTradeOrder = {
+        id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        symbol: selectedStock.symbol,
+        type: action === 'BUY' ? 'buy' : 'sell',
+        orderType: orderType,
+        quantity: qty,
+        price: orderType === "target" ? triggerPrice : undefined,
+        triggerPrice: triggerPrice,
+        status: "pending",
+        lotSize: getLotSize(selectedStock.symbol),
+      };
+
+      setPendingOrders(prev => [...prev, newOrder]);
+      alert(`${orderType === "stop-loss" ? "Stop-loss" : "Target"} order placed at ₹${triggerPrice}`);
+    }
+  }, [selectedStock, tradeQty, balance, orderType, limitPrice, stopLossPrice, useLots]);
 
   const addAlert = useCallback(() => {
     if (!alertInput.symbol || !alertInput.price) return;
@@ -637,9 +809,9 @@ export default function App() {
           <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-3">
             <header className="flex items-center justify-between border-b border-white/5 pb-2">
           <div className="flex items-center gap-6 overflow-x-auto no-scrollbar pr-4">
-            <div className="flex items-center gap-2 group cursor-pointer shrink-0 ml-4" onClick={() => window.location.reload()}>
-              <img src="/icons/logo.png" alt="ZENIT Logo" className="w-7 h-7 object-contain group-hover:scale-110 transition-transform" />
-            </div>
+             <div className="flex items-center gap-2 group cursor-pointer shrink-0 ml-4">
+               <img src="/icons/logo.png" alt="ZENIT Logo" className="w-7 h-7 object-contain group-hover:scale-110 transition-transform" />
+             </div>
             <div className="h-10 w-[1px] bg-white/10 mx-2" />
             {indices.map((idx: any, i: number) => (
               <div key={idx.name + i} className="flex flex-col min-w-max px-3 border-r border-white/5 last:border-none">
@@ -679,7 +851,20 @@ export default function App() {
 
       <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 flex flex-col lg:grid lg:grid-cols-12 lg:grid-rows-[repeat(11,minmax(0,1fr))] gap-2 lg:gap-3 overflow-y-auto lg:overflow-hidden pt-1 lg:pt-2 mb-16 lg:mb-0">
         <section className={`lg:col-span-3 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden ${mobileTab === 'watchlist' ? 'flex min-h-[500px]' : 'hidden lg:flex'}`}>
-          <WidgetHeader title="Terminal Monitor" icon={Activity} onExpand={() => setExpandedSection('Watchlist')} />
+<WidgetHeader 
+              title="Terminal Monitor" 
+              icon={Activity} 
+              onExpand={() => setExpandedSection('Watchlist')}
+              extra={
+                <button
+                  onClick={exportWatchlist}
+                  className="p-1.5 hover:bg-white/5 rounded text-zinc-600 hover:text-amber-500 transition-colors"
+                  title="Export Watchlist (CSV)"
+                >
+                  <ExternalLink size={12} />
+                </button>
+              }
+            />
           <div className="relative mb-3">
              <SearchIcon size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
              <input 
@@ -781,29 +966,61 @@ export default function App() {
                    <button onClick={() => setExpandedSection('Portfolio')} className="text-zinc-700 hover:text-amber-500 transition-colors" title="Expand"><Maximize2 size={10} /></button>
                  </div>
                </div>
-              <div className="space-y-2 max-h-[150px] overflow-y-auto no-scrollbar">
-                {positions.map(p => {
-                  const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
-                  const pnlPct = (pnl / (p.avgPrice * p.quantity)) * 100;
-                  return (
-                    <div key={p.symbol} onClick={() => openStockDetail({symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0})} className="flex justify-between items-center p-2 bg-zinc-900 rounded border border-white/5 cursor-pointer hover:border-amber-500/30">
-                      <div>
-                        <span className="text-xs font-bold text-white block">{p.symbol}</span>
-                        <span className="text-[9px] text-zinc-500">{p.quantity} @ {p.avgPrice.toFixed(1)}</span>
-                      </div>
-                      <div className="text-right">
-                        <Mono className={`text-xs font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}
-                        </Mono>
-                        <span className={`text-[9px] font-bold block ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                          ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-          </div>
+               <div className="space-y-2 max-h-[150px] overflow-y-auto no-scrollbar">
+                 {positions.map(p => {
+                   const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
+                   const pnlPct = (pnl / (p.avgPrice * p.quantity)) * 100;
+                   const lotInfo = p.lotSize ? ` (${toLots(p.quantity, p.symbol)} lots)` : '';
+                   return (
+                     <div key={p.symbol} onClick={() => openStockDetail({symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0})} className="flex justify-between items-center p-2 bg-zinc-900 rounded border border-white/5 cursor-pointer hover:border-amber-500/30">
+                       <div>
+                         <span className="text-xs font-bold text-white block">{p.symbol}</span>
+                         <span className="text-[9px] text-zinc-500">{p.quantity}{lotInfo} @ {p.avgPrice.toFixed(1)}</span>
+                       </div>
+                       <div className="text-right">
+                         <Mono className={`text-xs font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                           {pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}
+                         </Mono>
+                         <span className={`text-[9px] font-bold block ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                           ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                         </span>
+                       </div>
+                     </div>
+                   )
+                 })}
+               </div>
+
+               {/* Pending Orders Section */}
+               {pendingOrders.filter(o => o.status === "pending").length > 0 && (
+                 <div className="mt-3 pt-3 border-t border-white/5">
+                   <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-black mb-2 flex items-center gap-1">
+                     <Target size={10} /> Pending Orders ({pendingOrders.filter(o => o.status === "pending").length})
+                   </div>
+                   <div className="space-y-1.5 max-h-[100px] overflow-y-auto no-scrollbar">
+                     {pendingOrders.filter(o => o.status === "pending").map(order => (
+                       <div key={order.id} className="flex items-center justify-between p-2 bg-zinc-900/50 rounded border border-amber-500/20">
+                         <div>
+                           <span className={`text-[10px] font-bold ${order.type === 'buy' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                             {order.type.toUpperCase()} {order.orderType === "stop-loss" ? "SL" : order.orderType === "target" ? "TGT" : ""}
+                           </span>
+                           <span className="text-[10px] text-white ml-2">{order.symbol}</span>
+                           <span className="text-[9px] text-zinc-500 ml-1">×{order.quantity}</span>
+                         </div>
+                         <div className="flex items-center gap-2">
+                           <span className="text-[10px] text-amber-500 font-mono">₹{order.triggerPrice?.toFixed(2)}</span>
+                           <button
+                             onClick={() => setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: "cancelled" } : o))}
+                             className="text-zinc-600 hover:text-rose-400 transition-colors"
+                           >
+                             <X size={10} />
+                           </button>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+               )}
+           </div>
         </section>
 
         <section className={`lg:col-span-9 lg:row-span-4 gap-3 ${mobileTab === 'indices' ? 'flex flex-col lg:flex-row' : 'hidden lg:flex lg:flex-row'}`}>
@@ -1193,9 +1410,16 @@ export default function App() {
                     
                     <div className="grid grid-cols-3 gap-3">
                       <div className="col-span-2 p-4 bg-zinc-900/40 border border-white/5 rounded-xl">
-                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                          <Users size={12} className="text-emerald-500" /> Institutional Flows (₹Cr)
-                        </span>
+                         <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                           <Users size={12} className="text-emerald-500" /> Institutional Flows (₹Cr)
+                           <button
+                             onClick={() => exportFIIDIIData(30)}
+                             className="ml-auto p-1 hover:bg-white/5 rounded text-zinc-600 hover:text-amber-500 transition-colors"
+                             title="Export FII/DII Data (CSV)"
+                           >
+                             <ExternalLink size={10} />
+                           </button>
+                         </span>
                         <div className="grid grid-cols-5 gap-3">
                           <div className="col-span-2 p-3 bg-zinc-950 rounded-lg">
                             <div className="text-xs text-zinc-500 uppercase mb-2">🐻 FII (Today)</div>
@@ -1544,37 +1768,113 @@ export default function App() {
                    ))}
                 </div>
 
-                <div className="bg-zinc-900/60 border border-white/10 rounded-2xl p-6">
-                  <WidgetHeader title="Execution Engine" icon={Target} />
-                  <div className="flex flex-col gap-4 mt-2">
-                    <div className="flex items-center gap-4">
-                       <div className="flex-1">
-                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Quantity</label>
-                         <input 
-                           type="number" 
-                           value={tradeQty} 
-                           onChange={(e) => setTradeQty(e.target.value)}
+                 <div className="bg-zinc-900/60 border border-white/10 rounded-2xl p-6">
+                   <WidgetHeader title="Execution Engine" icon={Target} />
+                   <div className="flex flex-col gap-4 mt-2">
+                     {/* Order Type Selection */}
+                     <div>
+                       <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Order Type</label>
+                       <div className="grid grid-cols-4 gap-2">
+                         {(["market", "limit", "stop-loss", "target"] as const).map(type => (
+                           <button
+                             key={type}
+                             onClick={() => setOrderType(type)}
+                             className={`p-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
+                               orderType === type
+                                 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50'
+                                 : 'bg-zinc-950/50 text-zinc-500 border border-white/5 hover:border-zinc-400'
+                             }`}
+                           >
+                             {type === "stop-loss" ? "SL" : type === "target" ? "Target" : type.charAt(0).toUpperCase() + type.slice(1)}
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+
+                     {/* Lot Size Toggle */}
+                     {isFOStock(selectedStock?.symbol || "") && (
+                       <div className="flex items-center justify-between p-3 bg-zinc-950/50 rounded-lg border border-white/5">
+                         <div>
+                           <span className="text-[10px] text-zinc-400 font-bold uppercase">Use Lot Size</span>
+                           <span className="text-[9px] text-zinc-600 ml-2">(Lot: {getLotSize(selectedStock?.symbol || "")} shares)</span>
+                         </div>
+                         <button
+                           onClick={() => setUseLots(!useLots)}
+                           className={`w-12 h-6 rounded-full transition-all ${useLots ? 'bg-amber-500' : 'bg-zinc-700'}`}
+                         >
+                           <div className={`w-4 h-4 bg-white rounded-full transition-all ${useLots ? 'ml-7' : 'ml-1'} mt-1`} />
+                         </button>
+                       </div>
+                     )}
+
+                     {/* Quantity/Lots Input */}
+                     <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">
+                            {useLots ? 'Lots' : 'Quantity'}
+                          </label>
+                          <input
+                            type="number"
+                            value={tradeQty}
+                            onChange={(e) => setTradeQty(e.target.value)}
+                            className="w-full bg-zinc-950 border border-white/10 rounded-lg p-3 text-white font-mono outline-none focus:border-amber-500 transition-all"
+                          />
+                          {useLots && (
+                            <div className="text-[9px] text-zinc-600 mt-1">
+                              = {(fromLots(parseInt(tradeQty) || 0, selectedStock?.symbol || "")).toLocaleString()} shares
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Total Margin</label>
+                          <div className="w-full bg-zinc-950/50 border border-white/5 rounded-lg p-3 text-amber-500 font-mono flex items-center justify-between">
+                            <span>₹</span>
+                            <span>{((parseInt(tradeQty) || 0) * (useLots ? fromLots(parseInt(tradeQty) || 0, selectedStock?.symbol || "") : 1) * selectedStock.ltp).toLocaleString(undefined, {maximumFractionDigits:2})}</span>
+                          </div>
+                        </div>
+                     </div>
+
+                     {/* Limit Price Input */}
+                     {orderType === "limit" && (
+                       <div>
+                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Limit Price</label>
+                         <input
+                           type="number"
+                           value={limitPrice}
+                           onChange={(e) => setLimitPrice(e.target.value)}
+                           placeholder={selectedStock.ltp.toFixed(2)}
                            className="w-full bg-zinc-950 border border-white/10 rounded-lg p-3 text-white font-mono outline-none focus:border-amber-500 transition-all"
                          />
                        </div>
-                       <div className="flex-1">
-                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">Total Margin</label>
-                         <div className="w-full bg-zinc-950/50 border border-white/5 rounded-lg p-3 text-amber-500 font-mono flex items-center justify-between">
-                           <span>₹</span>
-                           <span>{((parseInt(tradeQty) || 0) * selectedStock.ltp).toLocaleString(undefined, {maximumFractionDigits:2})}</span>
-                         </div>
+                     )}
+
+                     {/* Stop-Loss/Target Price Input */}
+                     {(orderType === "stop-loss" || orderType === "target") && (
+                       <div>
+                         <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-black block mb-2">
+                           {orderType === "stop-loss" ? "Stop Price" : "Target Price"}
+                         </label>
+                         <input
+                           type="number"
+                           value={stopLossPrice}
+                           onChange={(e) => setStopLossPrice(e.target.value)}
+                           placeholder={selectedStock.ltp.toFixed(2)}
+                           className="w-full bg-zinc-950 border border-white/10 rounded-lg p-3 text-white font-mono outline-none focus:border-amber-500 transition-all"
+                         />
                        </div>
-                    </div>
-                    <div className="flex gap-4">
-                      <button onClick={() => executeTrade('BUY')} className="flex-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
-                        Buy Market
-                      </button>
-                      <button onClick={() => executeTrade('SELL')} className="flex-1 bg-rose-500/20 text-rose-400 border border-rose-500/50 hover:bg-rose-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
-                        Sell Market
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                     )}
+
+                     {/* Buy/Sell Buttons */}
+                     <div className="flex gap-4">
+                       <button onClick={() => executeTrade('BUY')} className="flex-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
+                         {orderType === "market" ? "Buy Market" : orderType === "limit" ? "Buy Limit" : orderType === "stop-loss" ? "Buy SL" : "Buy Target"}
+                       </button>
+                       <button onClick={() => executeTrade('SELL')} className="flex-1 bg-rose-500/20 text-rose-400 border border-rose-500/50 hover:bg-rose-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
+                         {orderType === "market" ? "Sell Market" : orderType === "limit" ? "Sell Limit" : orderType === "stop-loss" ? "Sell SL" : "Sell Target"}
+                       </button>
+                     </div>
+                   </div>
+                 </div>
 
               </div>
             </motion.div>

@@ -13,6 +13,10 @@ interface Candle {
   volume: number;
 }
 
+// Valid ranges and intervals
+const VALID_RANGES = ["5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"];
+const VALID_INTERVALS = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"];
+
 async function fetchCurrentPrice(symbol: string): Promise<{ price: number; isDelayed: boolean } | null> {
   const cacheKey = `price:${symbol}`;
   const cached = CACHE.get(cacheKey);
@@ -40,10 +44,10 @@ async function fetchCurrentPrice(symbol: string): Promise<{ price: number; isDel
   return null;
 }
 
-async function fetchHistoricalData(symbol: string, range: string = "3mo"): Promise<Candle[]> {
+async function fetchHistoricalData(symbol: string, range: string = "3mo", interval: string = "1d"): Promise<Candle[]> {
   try {
-    const res = await fetch(`${YAHOO_FINANCE_API}/${symbol}.NS?range=${range}&interval=1d`, {
-      signal: AbortSignal.timeout(8000),
+    const res = await fetch(`${YAHOO_FINANCE_API}/${symbol}.NS?range=${range}&interval=${interval}`, {
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!res.ok) throw new Error("Yahoo API error");
@@ -58,7 +62,6 @@ async function fetchHistoricalData(symbol: string, range: string = "3mo"): Promi
 
     const candles: Candle[] = [];
     for (let i = 0; i < timestamps.length; i++) {
-        // filter out null values which occasionally appear in Yahoo data
         if (open[i] != null && close[i] != null) {
             candles.push({
                 time: timestamps[i] * 1000,
@@ -82,26 +85,30 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol")?.toUpperCase().replace(".NS", "");
   const range = searchParams.get("range") || "3mo";
+  const interval = searchParams.get("interval") || "1d";
 
   if (!symbol) {
     return NextResponse.json({ error: "Symbol required" }, { status: 400 });
   }
 
-  const cacheKey = `history:${symbol}:${range}`;
+  // Validate parameters
+  const validRange = VALID_RANGES.includes(range) ? range : "3mo";
+  const validInterval = VALID_INTERVALS.includes(interval) ? interval : "1d";
+
+  const cacheKey = `history:${symbol}:${validRange}:${validInterval}`;
   const cached = CACHE.get(cacheKey);
   if (cached && cached.expiry > Date.now()) {
     return NextResponse.json(cached.data);
   }
 
-  console.log(`[HISTORY] Fetching data for: ${symbol} (${range})`);
-  
-  // Fetch parallel for speed
+  console.log(`[HISTORY] Fetching data for: ${symbol} (${validRange}, ${validInterval})`);
+
   const [currentPriceResult, candles] = await Promise.all([
     fetchCurrentPrice(symbol).catch(err => {
         console.error(`[HISTORY] Current price fetch failed for ${symbol}:`, err);
         return null;
     }),
-    fetchHistoricalData(symbol, range).catch(err => {
+    fetchHistoricalData(symbol, validRange, validInterval).catch(err => {
         console.error(`[HISTORY] Historical fetch failed for ${symbol}:`, err);
         return [];
     })
@@ -109,6 +116,8 @@ export async function GET(request: Request) {
 
   const response = {
     symbol,
+    range: validRange,
+    interval: validInterval,
     candles,
     currentPrice: currentPriceResult?.price || (candles.length > 0 ? candles[candles.length - 1].close : 0),
     isDelayed: currentPriceResult?.isDelayed || false,
@@ -116,8 +125,9 @@ export async function GET(request: Request) {
     timestamp: Date.now()
   };
 
-  // Cache for 10 minutes
-  CACHE.set(cacheKey, { data: response, expiry: Date.now() + 600000 });
+  // Cache duration based on range
+  const cacheTime = validRange === "max" || validRange === "5y" ? 3600000 : 600000; // 1hr for long, 10min for short
+  CACHE.set(cacheKey, { data: response, expiry: Date.now() + cacheTime });
 
   return NextResponse.json(response);
 }
