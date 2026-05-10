@@ -4,14 +4,17 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { formatNumber } from '@/lib/utils';
 import StockHeatmap from '@/components/StockHeatmap';
 import RealCandlestickChart from '@/components/CandlestickChart';
-import {
-  Zap,
-  Layers,
+import Sparkline from '@/components/Sparkline';
+import MarketOverview from '@/components/MarketOverview';
+import ContextualDataPanel from '@/components/ContextualDataPanel';
+import { 
+  Zap, 
+  Layers, 
   Bot,
-  Activity,
-  Newspaper,
-  BarChart3,
-  X,
+  Activity, 
+  Newspaper, 
+  BarChart3, 
+  X, 
   Command,
   Cpu,
   Loader2,
@@ -39,36 +42,18 @@ import {
   Gauge,
   BarChart2,
   Building2,
-  Landmark,
-  Calendar,
-  PieChart
+  Landmark
 } from 'lucide-react';
 import { StartupLoading } from "@/components/startup-loading";
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSSE } from "@/hooks/useSSE";
-import { MobileNav, MobileTab, MobileView } from "@/components/mobile-nav";
+import { MobileNav, MobileTab } from "@/components/mobile-nav";
 import type { IndexData, StockQuote, MarketBreadth, GainerLoser, SectorData, SentimentData } from "@/types/market";
 import type { LucideIcon } from "lucide-react";
 import { getLotSize, isFOStock, toLots, fromLots } from "@/lib/fo-lots";
 import type { PaperTradeOrder } from "@/types/market";
-import { OptionsChain } from "@/components/options-chain";
-import { SentimentGauge } from "@/components/sentiment-gauge";
-import { OIWall } from "@/components/oi-wall";
-import { EarningsContent } from "@/components/EarningsWidget";
-import { CorporateActionsContent } from "@/components/CorporateActionsWidget";
-import { EconomicCalendarContent } from "@/components/EconomicCalendarWidget";
 
 const WATCHLIST_KEY = "zenit:watchlist";
-
-type DesktopView = "overview" | "fo" | "institutional" | "earnings" | "macro";
-
-const DESKTOP_VIEWS: { id: DesktopView; label: string; icon: LucideIcon }[] = [
-  { id: "overview", label: "Overview", icon: Layers },
-  { id: "fo", label: "F&O", icon: BarChart3 },
-  { id: "institutional", label: "Institutional", icon: Building2 },
-  { id: "earnings", label: "Earnings", icon: Calendar },
-  { id: "macro", label: "Macro", icon: Globe },
-];
 
 const formatPrice = (val: number) => {
   if (typeof val !== 'number' || isNaN(val)) return "0.00";
@@ -164,221 +149,6 @@ const CandlestickChart = ({ height = 180, data = [] }: { height?: number; data?:
   );
 };
 
-// ─── View-specific card components ─────────────────────────────────
-
-const VIXCard = () => {
-  const [vix, setVix] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/vix').then(r => r.json()).then(setVix).catch(() => {});
-  }, []);
-  if (!vix || vix.error) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">VIX data unavailable</div>;
-  return (
-    <div className="flex-1 flex flex-col justify-center items-center gap-2">
-      <Mono className="text-3xl font-black text-amber-500">{vix.vix}</Mono>
-      <span className={`text-xs font-bold ${parseFloat(vix.change) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-        {parseFloat(vix.change) >= 0 ? '+' : ''}{vix.change} ({vix.percentChange}%)
-      </span>
-      <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${vix.regime === 'HIGH' ? 'bg-rose-500/20 text-rose-500' : vix.regime === 'LOW' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-zinc-500/20 text-zinc-400'}`}>
-        {vix.regime}
-      </span>
-      <div className="text-[9px] text-zinc-600 mt-1">Implied Move: {vix.impliedMove}%</div>
-    </div>
-  );
-};
-
-const FlowCard = () => {
-  const [flow, setFlow] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/flow').then(r => r.json()).then(setFlow).catch(() => {});
-  }, []);
-  if (!flow || flow.error) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">Flow data unavailable</div>;
-  return (
-    <div className="flex-1 flex flex-col gap-3 justify-center p-2">
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-center"><div className="text-[9px] text-zinc-500">PCR</div><Mono className="text-lg font-black text-white">{flow.pcr}</Mono></div>
-        <div className="text-center"><div className="text-[9px] text-zinc-500">Delta</div><Mono className={`text-lg font-black ${flow.delta >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{flow.delta}%</Mono></div>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-center"><div className="text-[9px] text-zinc-500">Call OI</div><Mono className="text-xs text-white">{formatNumber(flow.callOI)}</Mono></div>
-        <div className="text-center"><div className="text-[9px] text-zinc-500">Put OI</div><Mono className="text-xs text-white">{formatNumber(flow.putOI)}</Mono></div>
-      </div>
-      <div className="text-center"><div className="text-[9px] text-zinc-500">IV</div><Mono className="text-xs text-amber-500">{flow.impliedVol}%</Mono></div>
-    </div>
-  );
-};
-
-const InstitutionalCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/institutional?sectors=false').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  if (!data) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">Loading...</div>;
-  const fii = data.fii || {};
-  const dii = data.dii || {};
-  return (
-    <div className="flex-1 flex flex-col gap-3 overflow-y-auto">
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-zinc-950/50 rounded-lg p-3 border border-white/5">
-          <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1">FII Net</div>
-          <Mono className={`text-xl font-black ${(fii.net || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-            {(fii.net || 0) >= 0 ? '+' : ''}{formatNumber(fii.net || 0)} Cr
-          </Mono>
-          <div className="flex justify-between mt-2 text-[9px]">
-            <span className="text-emerald-500">Buy: {formatNumber(fii.buyValue || 0)}</span>
-            <span className="text-rose-500">Sell: {formatNumber(fii.sellValue || 0)}</span>
-          </div>
-        </div>
-        <div className="bg-zinc-950/50 rounded-lg p-3 border border-white/5">
-          <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1">DII Net</div>
-          <Mono className={`text-xl font-black ${(dii.net || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-            {(dii.net || 0) >= 0 ? '+' : ''}{formatNumber(dii.net || 0)} Cr
-          </Mono>
-          <div className="flex justify-between mt-2 text-[9px]">
-            <span className="text-emerald-500">Buy: {formatNumber(dii.buyValue || 0)}</span>
-            <span className="text-rose-500">Sell: {formatNumber(dii.sellValue || 0)}</span>
-          </div>
-        </div>
-      </div>
-      <div className="text-[8px] text-zinc-600 text-center">{data.date} · {data.status === 'live' ? 'Live' : data.status}</div>
-    </div>
-  );
-};
-
-const SectorFlowsCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/institutional').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const flows = data?.sectorFlows || [];
-  if (flows.length === 0) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">Loading...</div>;
-  return (
-    <div className="flex-1 overflow-y-auto space-y-1.5">
-      {flows.map((f: any) => (
-        <div key={f.sector} className="flex items-center justify-between p-2 bg-zinc-950/50 rounded-lg border border-white/5">
-          <div>
-            <div className="text-[11px] font-bold text-white">{f.sector}</div>
-            <div className="text-[9px] text-zinc-500">{f.name}</div>
-          </div>
-          <div className="text-right">
-            <div className={`text-[11px] font-mono font-bold ${f.trend === 'inflow' ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {f.trend === 'inflow' ? '+' : ''}{formatNumber(f.netFlow)} Cr
-            </div>
-            <div className={`text-[9px] ${f.percentChange >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {f.percentChange >= 0 ? '+' : ''}{f.percentChange}%
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-const InstitutionalHistoryCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/institutional?history=30&sectors=false').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const history = data?.history || [];
-  if (history.length === 0) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">No historical data yet</div>;
-  const maxAbs = Math.max(...history.map((d: any) => Math.max(Math.abs(d.fiiNet || 0), Math.abs(d.diiNet || 0))), 1);
-  return (
-    <div className="flex-1 flex items-end gap-0.5 overflow-x-auto no-scrollbar pb-6 pt-2">
-      {history.map((d: any, i: number) => (
-        <div key={i} className="flex flex-col items-center gap-0.5 min-w-[20px] flex-1">
-          <div className="flex gap-px items-end h-20">
-            <div className="w-1.5 bg-emerald-500/60 rounded-t" style={{ height: `${Math.abs(d.fiiNet || 0) / maxAbs * 100}%`, minHeight: 2 }} />
-            <div className="w-1.5 bg-blue-500/60 rounded-t" style={{ height: `${Math.abs(d.diiNet || 0) / maxAbs * 100}%`, minHeight: 2 }} />
-          </div>
-          <span className="text-[7px] text-zinc-600 rotate-45 origin-left">{d.date?.slice(5)}</span>
-        </div>
-      ))}
-      <div className="absolute bottom-0 right-0 flex gap-2 text-[8px]">
-        <span className="text-emerald-500">FII</span>
-        <span className="text-blue-500">DII</span>
-      </div>
-    </div>
-  );
-};
-
-const FXRatesCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/macro?type=fx').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const fx = data?.fx || {};
-  const pairs = [
-    { key: 'usdInr', label: 'USD/INR', flag: '🇺🇸' },
-    { key: 'eurInr', label: 'EUR/INR', flag: '🇪🇺' },
-    { key: 'gbpInr', label: 'GBP/INR', flag: '🇬🇧' },
-    { key: 'jpyInr', label: 'JPY/INR', flag: '🇯🇵' },
-  ];
-  return (
-    <div className="flex-1 flex flex-col gap-2 justify-center">
-      {pairs.map(p => (
-        <div key={p.key} className="flex items-center justify-between p-2 bg-zinc-950/50 rounded-lg border border-white/5">
-          <span className="text-[10px] text-zinc-400">{p.flag} {p.label}</span>
-          <Mono className="text-xs font-bold text-white">{fx[p.key] ? fx[p.key].toFixed(2) : '—'}</Mono>
-        </div>
-      ))}
-      <div className="text-[8px] text-zinc-600 text-center mt-1">Source: {fx.source || 'N/A'}</div>
-    </div>
-  );
-};
-
-const RBIRatesCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/macro').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const rbi = data?.macro?.rbiRates || {};
-  const rates = [
-    { label: 'Repo', value: rbi.repo },
-    { label: 'Reverse Repo', value: rbi.reverseRepo },
-    { label: 'CRR', value: rbi.crr },
-    { label: 'SLR', value: rbi.slr },
-    { label: 'MSF', value: rbi.msf },
-    { label: 'Bank Rate', value: rbi.bankRate },
-  ];
-  return (
-    <div className="flex-1 flex flex-col gap-1.5 justify-center">
-      {rates.map(r => (
-        <div key={r.label} className="flex items-center justify-between px-2 py-1.5 bg-zinc-950/50 rounded border border-white/5">
-          <span className="text-[9px] text-zinc-500">{r.label}</span>
-          <Mono className="text-[11px] font-bold text-white">{r.value ? `${r.value}%` : '—'}</Mono>
-        </div>
-      ))}
-      {rbi.lastPolicyDate && <div className="text-[8px] text-zinc-600 text-center mt-1">Last: {rbi.lastPolicyDate}</div>}
-    </div>
-  );
-};
-
-const MacroIndicatorsCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/macro').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const macro = data?.macro || {};
-  const indicators = [
-    { label: 'GDP Growth', value: macro.gdp?.growth, year: macro.gdp?.year, unit: '%' },
-    { label: 'GDP Value', value: macro.gdpValue?.valueTrillion, year: macro.gdpValue?.year, unit: 'T USD' },
-    { label: 'CPI Inflation', value: macro.cpi?.inflation, year: macro.cpi?.year, unit: '%' },
-    { label: 'IIP Growth', value: macro.iip?.growth, year: macro.iip?.year, unit: '%' },
-  ];
-  return (
-    <div className="flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar px-2">
-      {indicators.map(ind => (
-        <div key={ind.label} className="flex flex-col items-center gap-1 bg-zinc-950/50 rounded-lg border border-white/5 p-4 min-w-[120px]">
-          <span className="text-[9px] text-zinc-500 uppercase tracking-wider">{ind.label}</span>
-          <Mono className="text-xl font-black text-white">
-            {ind.value !== null && ind.value !== undefined ? `${ind.value}${ind.unit}` : '—'}
-          </Mono>
-          {ind.year && <span className="text-[8px] text-zinc-600">{ind.year}</span>}
-        </div>
-      ))}
-    </div>
-  );
-};
-
 interface WatchlistItem {
   symbol: string;
   name: string;
@@ -421,7 +191,7 @@ export default function App() {
   const [sectors, setSectors] = useState<SectorData[]>([]);
   const [sentiment, setSentiment] = useState<SentimentData | null>(null);
   
-  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [watchlist, setWatchlist] = useState<{ symbol: string; name: string; ltp: number; change: number; percentChange: number; volume: number; timestamp: number; recentPrices?: number[]; week52High?: number; week52Low?: number; week52HighPct?: number; week52LowPct?: number }[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -432,7 +202,6 @@ export default function App() {
   const [selectedStock, setSelectedStock] = useState<WatchlistItem | null>(null);
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("indices");
-  const [activeView, setActiveView] = useState<DesktopView>("overview");
   
   const [stockInsight, setStockInsight] = useState({ text: "", loading: false });
   const [copilotQuery, setCopilotQuery] = useState("");
@@ -464,7 +233,36 @@ export default function App() {
   const [correlations, setCorrelations] = useState({ itNasdaq: 0, itUsd: 0, bankYield: 0, vixNifty: 0 });
   const [keyLevels, setKeyLevels] = useState({ support: 0, resistance: 0, pivot: 0, maxPain: 0, pcr: '0' });
 
-  // Export functions
+  // Track recent prices for sparklines (last 20 ticks)
+  const [recentPricesMap, setRecentPricesMap] = useState<Record<string, number[]>>({});
+
+  const updateRecentPrices = useCallback((symbol: string, price: number) => {
+    setRecentPricesMap(prev => {
+      const prices = [...(prev[symbol] || []), price];
+      // Keep last 20 prices
+      if (prices.length > 20) prices.shift();
+      return { ...prev, [symbol]: prices };
+    });
+  }, []);
+
+  // Fetch 52-week data for a symbol
+  const fetch52WeekData = useCallback(async (symbol: string) => {
+    try {
+      const res = await fetch(`/api/history?symbol=${symbol}&range=1y&interval=1d&52w=true`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.week52High) {
+          setWatchlist(prev => prev.map(w =>
+            w.symbol === symbol
+              ? { ...w, week52High: data.week52High, week52Low: data.week52Low, week52HighPct: data.week52HighPct, week52LowPct: data.week52LowPct }
+              : w
+          ));
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to fetch 52w data for ${symbol}:`, err);
+    }
+  }, []);
   const exportWatchlist = useCallback(async () => {
     try {
       const response = await fetch('/api/export/watchlist', {
@@ -631,6 +429,9 @@ export default function App() {
       setPositions(prev => prev.map(p =>
         p.symbol === data.symbol ? { ...p, currentPrice: data.ltp } : p
       ));
+
+      // Update recent prices for sparklines
+      updateRecentPrices(data.symbol, data.ltp);
 
       // Check and execute pending orders
       setPendingOrders(prevOrders => {
@@ -1061,27 +862,6 @@ export default function App() {
           </div>
 
           <div className="hidden lg:flex items-center gap-2">
-            <div className="flex items-center gap-0.5 bg-zinc-900/60 rounded-lg border border-white/5 p-0.5">
-              {DESKTOP_VIEWS.map(view => {
-                const Icon = view.icon;
-                const isActive = activeView === view.id;
-                return (
-                  <button
-                    key={view.id}
-                    onClick={() => setActiveView(view.id)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[9px] font-bold uppercase tracking-wider transition-all ${
-                      isActive
-                        ? 'bg-amber-500/15 text-amber-500 border border-amber-500/20'
-                        : 'text-zinc-600 hover:text-zinc-400 hover:bg-white/5 border border-transparent'
-                    }`}
-                  >
-                    <Icon size={10} />
-                    {view.label}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="h-5 w-[1px] bg-white/10 mx-1" />
             <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/5 rounded-full border border-emerald-500/10">
               <div className={`w-1 h-1 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse shadow-[0_0_4px_#10b981]' : 'bg-zinc-500'}`} />
               <span className="text-[8px] font-bold text-emerald-500/80 uppercase tracking-tighter">
@@ -1104,120 +884,7 @@ export default function App() {
         </header>
       </div>
 
-      <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 flex flex-col lg:grid lg:grid-cols-12 lg:auto-rows-fr gap-2 lg:gap-3 overflow-y-auto lg:overflow-hidden pt-1 lg:pt-2 mb-16 lg:mb-0">
-
-      {/* ── Desktop: view-specific content ── */}
-      {activeView !== "overview" && (<>
-          {activeView === "fo" && (
-            <>
-              <section className="lg:col-span-8 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <OptionsChain />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <OIWall />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <SentimentGauge />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="VIX" icon={Gauge} />
-                <VIXCard />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="Order Flow" icon={Activity} />
-                <FlowCard />
-              </section>
-            </>
-          )}
-          {activeView === "institutional" && (
-            <>
-              <section className="lg:col-span-6 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="FII / DII Activity" icon={Building2} />
-                <InstitutionalCard />
-              </section>
-              <section className="lg:col-span-6 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="Sector Flows" icon={PieChart} />
-                <SectorFlowsCard />
-              </section>
-              <section className="lg:col-span-12 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="FII/DII History" icon={LineChart} />
-                <InstitutionalHistoryCard />
-              </section>
-            </>
-          )}
-          {activeView === "earnings" && (
-            <>
-              <section className="lg:col-span-7 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <EarningsContent />
-              </section>
-              <section className="lg:col-span-5 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <CorporateActionsContent />
-              </section>
-            </>
-          )}
-          {activeView === "macro" && (
-            <>
-              <section className="lg:col-span-6 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <EconomicCalendarContent />
-              </section>
-              <section className="lg:col-span-3 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="FX Rates" icon={Globe} />
-                <FXRatesCard />
-              </section>
-              <section className="lg:col-span-3 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="RBI Rates" icon={Landmark} />
-                <RBIRatesCard />
-              </section>
-              <section className="lg:col-span-12 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="Macro Indicators" icon={BarChart3} />
-                <MacroIndicatorsCard />
-              </section>
-            </>
-          )}
-      </>)}
-
-      {/* ── Mobile: view-specific content ── */}
-      {activeView === "fo" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><OptionsChain /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><SentimentGauge /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><OIWall /></div>
-        </div>
-      )}
-      {activeView === "institutional" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="FII / DII Activity" icon={Building2} />
-            <InstitutionalCard />
-          </div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="Sector Flows" icon={PieChart} />
-            <SectorFlowsCard />
-          </div>
-        </div>
-      )}
-      {activeView === "earnings" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><EarningsContent /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><CorporateActionsContent /></div>
-        </div>
-      )}
-      {activeView === "macro" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><EconomicCalendarContent /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="FX Rates" icon={Globe} />
-            <FXRatesCard />
-          </div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="RBI Rates" icon={Landmark} />
-            <RBIRatesCard />
-          </div>
-        </div>
-      )}
-
-      {/* ── Overview view (desktop + mobile) ── */}
-      {activeView === "overview" && (<>
+      <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 flex flex-col lg:grid lg:grid-cols-12 lg:grid-rows-[repeat(11,minmax(0,1fr))] gap-2 lg:gap-3 overflow-y-auto lg:overflow-hidden pt-1 lg:pt-2 mb-16 lg:mb-0">
         <section className={`lg:col-span-3 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden ${mobileTab === 'watchlist' ? 'flex min-h-[500px]' : 'hidden lg:flex'}`}>
 <WidgetHeader 
               title="Terminal Monitor" 
@@ -1291,70 +958,67 @@ export default function App() {
                   </div>
                 ))}
               </div>
-            ) : watchlist.length === 0 && !searchQuery ? (
-              <div className="text-center py-8">
-                <Star size={24} className="mx-auto mb-2 text-zinc-700" />
-                <p className="text-[11px] text-zinc-600">Your watchlist is empty</p>
-                <p className="text-[9px] text-zinc-700 mt-1">Search above to add stocks</p>
-              </div>
-            ) : (
-              watchlist.map((stock) => (
-                <div 
-                  key={stock.symbol} 
-                  onClick={() => openStockDetail(stock)}
-                  className="group flex items-center justify-between p-2.5 rounded-lg hover:bg-white/5 cursor-pointer border border-transparent hover:border-white/5 transition-all"
-                >
-                  <div>
-                    <div className="text-sm font-black text-white group-hover:text-amber-500 transition-colors tracking-tighter">{stock.symbol}</div>
-                    <div className="text-[9px] text-zinc-600 font-bold uppercase tracking-tight">{stock.name}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                       <Mono className={`text-sm ${stock.percentChange >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>{formatPrice(stock.ltp)}</Mono>
-                       <div className={`text-[10px] font-black ${stock.percentChange >= 0 ? 'text-emerald-500/40' : 'text-rose-500/40'}`}>
-                         {stock.percentChange > 0 ? '+' : ''}{stock.percentChange.toFixed(2)}%
-                       </div>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); removeFromWatchlist(stock.symbol); }}
-                      className="p-1 opacity-0 group-hover:opacity-100 hover:text-rose-500 transition-all"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="bg-zinc-950/50 border-t border-white/10 p-4 shrink-0 flex flex-col gap-3">
-               <div className="flex justify-between items-center">
-                 <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-black flex items-center gap-1"><Wallet size={12}/> Paper Portfolio</span>
-                 <div className="flex items-center gap-2">
-                   <Mono className="text-sm font-bold text-emerald-400">₹{balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Mono>
-                   <button onClick={() => setExpandedSection('Portfolio')} className="text-zinc-700 hover:text-amber-500 transition-colors" title="Expand"><Maximize2 size={10} /></button>
-                 </div>
+             ) : watchlist.length === 0 && !searchQuery ? (
+               <div className="text-center py-8">
+                 <Star size={24} className="mx-auto mb-2 text-zinc-700" />
+                 <p className="text-[11px] text-zinc-600">Your watchlist is empty</p>
+                 <p className="text-[9px] text-zinc-700 mt-1">Search above to add stocks</p>
                </div>
-               <div className="space-y-2 max-h-[150px] overflow-y-auto no-scrollbar">
-                 {positions.map(p => {
-                   const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
-                   const pnlPct = (pnl / (p.avgPrice * p.quantity)) * 100;
-                   const lotInfo = p.lotSize ? ` (${toLots(p.quantity, p.symbol)} lots)` : '';
-                   return (
-                     <div key={p.symbol} onClick={() => openStockDetail({symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0})} className="flex justify-between items-center p-2 bg-zinc-900 rounded border border-white/5 cursor-pointer hover:border-amber-500/30">
-                       <div>
-                         <span className="text-xs font-bold text-white block">{p.symbol}</span>
-                         <span className="text-[9px] text-zinc-500">{p.quantity}{lotInfo} @ {p.avgPrice.toFixed(1)}</span>
+             ) : (
+               watchlist.map((stock) => (
+                 <div
+                   key={stock.symbol}
+                   onClick={() => openStockDetail(stock)}
+                   onMouseEnter={() => {
+                     // Lazy load 52-week data on hover
+                     if (!stock.week52High) fetch52WeekData(stock.symbol);
+                   }}
+                   className="group flex items-center justify-between p-2.5 rounded-lg hover:bg-white/5 cursor-pointer border border-transparent hover:border-white/5 transition-all"
+                 >
+                   <div className="flex items-center gap-2">
+                     <div>
+                       <div className="flex items-center gap-2">
+                         <span className="text-sm font-black text-white group-hover:text-amber-500 transition-colors tracking-tighter">{stock.symbol}</span>
+                         {/* Color-coded signal */}
+                         {stock.percentChange > 2 && <span className="text-[8px] bg-emerald-500/20 text-emerald-400 px-1 rounded">↑</span>}
+                         {stock.percentChange < -2 && <span className="text-[8px] bg-rose-500/20 text-rose-400 px-1 rounded">↓</span>}
                        </div>
-                       <div className="text-right">
-                         <Mono className={`text-xs font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                           {pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}
-                         </Mono>
-                         <span className={`text-[9px] font-bold block ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                           ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-                         </span>
-                       </div>
+                       <div className="text-[9px] text-zinc-600 font-bold uppercase tracking-tight">{stock.name}</div>
                      </div>
-                   )
+                   </div>
+                   <div className="flex items-center gap-3">
+                     {/* Sparkline */}
+                     {recentPricesMap[stock.symbol] && recentPricesMap[stock.symbol].length > 2 && (
+                       <Sparkline
+                         data={recentPricesMap[stock.symbol]}
+                         width={40}
+                         height={16}
+                         positiveColor="#10b981"
+                         negativeColor="#f43f5e"
+                       />
+                     )}
+                     <div className="text-right">
+                        <Mono className={`text-sm ${stock.percentChange >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>{formatPrice(stock.ltp)}</Mono>
+                        <div className={`text-[10px] font-black ${stock.percentChange >= 0 ? 'text-emerald-500/40' : 'text-rose-500/40'}`}>
+                          {stock.percentChange > 0 ? '+' : ''}{stock.percentChange.toFixed(2)}%
+                        </div>
+                        {/* 52-week indicator */}
+                        {stock.week52High && (
+                          <div className="text-[8px] text-zinc-600">
+                            {stock.week52HighPct > -5 ? '📈' : '📉'} {stock.week52HighPct.toFixed(1)}%
+                          </div>
+                        )}
+                     </div>
+                     <button
+                       onClick={(e) => { e.stopPropagation(); removeFromWatchlist(stock.symbol); }}
+                       className="p-1 opacity-0 group-hover:opacity-100 hover:text-rose-500 transition-all"
+                     >
+                       <X size={12} />
+                     </button>
+                   </div>
+                 </div>
+               ))
+             )
                  })}
                </div>
 
@@ -1677,7 +1341,6 @@ export default function App() {
              </div>
           </div>
         </section>
-      </>)}
 
       </main>
 
@@ -2069,10 +1732,9 @@ export default function App() {
 
       <MobileNav
         activeTab={mobileTab}
-        activeView={activeView as MobileView}
         onTabChange={setMobileTab}
-        onViewChange={(v) => setActiveView(v as DesktopView)}
         onOpenCopilot={() => setIsCopilotOpen(true)}
+        onOpenOptions={() => setActiveOverlay('options')}
       />
 
       <AnimatePresence>

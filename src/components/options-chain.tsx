@@ -201,8 +201,8 @@ export function OptionsChain({ symbol = "NIFTY" }: OptionsChainProps) {
               </div>
               <div>
                 <span className="text-muted-foreground">PCR: </span>
-                <span className={`font-mono font-medium ${getPCRColor(data.pcr)}`}>
-                  {data.pcr.toFixed(2)}
+                <span className={`font-mono font-medium ${getPCRColor(Number(data.pcr))}`}>
+                  {Number(data.pcr).toFixed(2)}
                 </span>
               </div>
               <div>

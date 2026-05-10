@@ -1,149 +1,170 @@
 import { NextResponse } from "next/server";
 
-const NSE_BASE_URL = "https://www.nseindia.com";
-const CACHE_KEY = "corporate-actions:latest";
-const CACHE_TTL = 3600; // 1 hour
+export const dynamic = "force-dynamic";
 
-// Cookie jar for NSE requests
-let nseCookies: string | null = null;
+const NSE_BASE_URL = "https://www.nseindia.com";
+
+const SCAN_SYMBOLS = [
+  "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL",
+  "LT", "ITC", "KOTAKBANK", "HINDUNILVR", "MARUTI", "SUNPHARMA", "TITAN",
+  "BAJFINANCE", "TATASTEEL", "WIPRO", "HCLTECH", "TECHM", "AXISBANK",
+  "NTPC", "POWERGRID", "ONGC", "COALINDIA", "TATAMOTORS", "DRREDDY",
+  "CIPLA", "BPCL", "JSWSTEEL", "HINDALCO", "VEDL", "NESTLEIND", "DIVISLAB",
+];
+
+interface CorporateAction {
+  symbol: string;
+  company: string;
+  actionType: "dividend" | "split" | "bonus" | "rights" | "buyback";
+  exDate: string;
+  recordDate?: string;
+  purpose: string;
+  details: string;
+}
+
+function determineActionType(purpose: string): CorporateAction["actionType"] {
+  const lower = purpose.toLowerCase();
+  if (lower.includes("dividend") || lower.includes("div")) return "dividend";
+  if (lower.includes("split") || lower.includes("sub-division")) return "split";
+  if (lower.includes("bonus")) return "bonus";
+  if (lower.includes("rights")) return "rights";
+  if (lower.includes("buyback") || lower.includes("buy-back")) return "buyback";
+  return "dividend";
+}
+
+function parseNseDate(dateStr: string): string {
+  const months: Record<string, string> = {
+    Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+    Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12",
+  };
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+  const [day, mon, year] = parts;
+  return `${year}-${months[mon] || "01"}-${day.padStart(2, "0")}`;
+}
 
 async function getNseCookies(): Promise<string | null> {
-  if (nseCookies) return nseCookies;
-
   try {
     const res = await fetch(NSE_BASE_URL, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Accept: "text/html,application/xhtml+xml",
       },
       signal: AbortSignal.timeout(5000),
     });
-    const setCookie = res.headers.get("set-cookie");
-    if (setCookie) {
-      nseCookies = setCookie.split(",").map(c => c.split(";")[0]).join("; ");
-    }
-    return nseCookies;
+    return res.headers.getSetCookie?.()?.join("; ") || null;
   } catch {
     return null;
   }
 }
 
-async function fetchNSE(endpoint: string) {
-  const cookies = await getNseCookies();
-  const res = await fetch(`${NSE_BASE_URL}${endpoint}`, {
-    headers: {
+const CACHE = new Map<string, { data: CorporateAction[]; expiry: number }>();
+
+async function fetchCorporateActions(): Promise<CorporateAction[]> {
+  const cacheKey = "corporate-actions:nse";
+  const cached = CACHE.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) return cached.data;
+
+  try {
+    const cookies = await getNseCookies();
+    const headers: Record<string, string> = {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      "Accept": "application/json",
-      "Referer": NSE_BASE_URL,
+      Accept: "application/json",
+      Referer: `${NSE_BASE_URL}/`,
       ...(cookies && { Cookie: cookies }),
-    },
-    signal: AbortSignal.timeout(10000),
-  });
+    };
 
-  if (!res.ok) throw new Error(`NSE API error: ${res.status}`);
-  return res.json();
+    const now = new Date();
+    const fromDate = new Date(now.getFullYear() - 1, 0, 1); // Jan 1 of last year
+    const toDate = new Date(now.getFullYear() + 1, 0, 1); // Jan 1 of next year
+    const fmt = (d: Date) =>
+      `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+    const from = fmt(fromDate);
+    const to = fmt(toDate);
+
+    // NSE requires per-symbol requests — batch with delays to avoid rate limiting
+    const BATCH_SIZE = 6;
+    const BATCH_DELAY = 300;
+    const allData: Array<Record<string, unknown>> = [];
+
+    for (let i = 0; i < SCAN_SYMBOLS.length; i += BATCH_SIZE) {
+      if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY));
+      const batch = SCAN_SYMBOLS.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (symbol) => {
+          const res = await fetch(
+            `${NSE_BASE_URL}/api/corporates-corporateActions?index=equities&from_date=${from}&to_date=${to}&symbol=${symbol}`,
+            { headers, signal: AbortSignal.timeout(8000) }
+          );
+          if (!res.ok) return [];
+          const data = await res.json();
+          return Array.isArray(data) ? data : [];
+        })
+      );
+      for (const r of batchResults) {
+        if (r.status === "fulfilled") allData.push(...r.value);
+      }
+    }
+
+    const actions: CorporateAction[] = [];
+
+    for (const item of allData) {
+      const subject = (item.subject as string) || "";
+      const exDate = parseNseDate(item.exDate as string);
+      actions.push({
+        symbol: item.symbol as string,
+        company: (item.comp as string) || (item.symbol as string),
+        actionType: determineActionType(subject),
+        exDate,
+        recordDate: item.recDate && item.recDate !== "-" ? parseNseDate(item.recDate as string) : undefined,
+        purpose: subject,
+        details: subject,
+      });
+    }
+
+    actions.sort((a, b) => b.exDate.localeCompare(a.exDate));
+    CACHE.set(cacheKey, { data: actions, expiry: Date.now() + 3600_000 });
+    return actions;
+  } catch {
+    return [];
+  }
 }
-
-export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol");
-  const actionType = searchParams.get("type"); // dividend, split, bonus
+  const actionType = searchParams.get("type");
   const days = parseInt(searchParams.get("days") || "30");
 
   try {
-    // Try cache first (implement with Redis if available)
-    // For now, fetch fresh data
+    let actions = await fetchCorporateActions();
 
-    const data = await fetchNSE("/api/corporates-corporateActions");
-
-    let actions = data?.data || [];
-
-    // Filter by symbol if provided
     if (symbol) {
-      actions = actions.filter((a: any) =>
-        a.symbol?.toLowerCase() === symbol.toLowerCase()
-      );
+      actions = actions.filter(a => a.symbol.toUpperCase() === symbol.toUpperCase());
     }
-
-    // Filter by action type
     if (actionType) {
-      actions = actions.filter((a: any) =>
-        a.purpose?.toLowerCase().includes(actionType.toLowerCase())
-      );
+      actions = actions.filter(a => a.actionType === actionType);
     }
 
-    // Filter by date range
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
-    actions = actions.filter((a: any) => {
-      const exDate = new Date(a.exDate || a.ex_date);
-      return exDate >= cutoffDate;
-    });
-
-    const formattedActions = actions.map((a: any) => ({
-      symbol: a.symbol || "",
-      company: a.company || a.symbol || "",
-      actionType: determineActionType(a.purpose || ""),
-      exDate: a.exDate || a.ex_date || "",
-      recordDate: a.recordDate || a.record_date || undefined,
-      purpose: a.purpose || "",
-      details: a.details || "",
-    }));
+    actions = actions.filter(a => new Date(a.exDate) >= cutoffDate);
 
     return NextResponse.json({
-      count: formattedActions.length,
+      count: actions.length,
       days,
-      actions: formattedActions,
+      actions,
+      source: "nse",
       timestamp: Date.now(),
     });
   } catch (error) {
     console.error("Corporate actions API error:", error);
-
-    // Return mock data for development
     return NextResponse.json({
-      count: 3,
+      count: 0,
       days,
-      actions: [
-        {
-          symbol: "RELIANCE",
-          company: "Reliance Industries Ltd",
-          actionType: "dividend",
-          exDate: "2026-05-15",
-          recordDate: "2026-05-16",
-          purpose: "Dividend - Rs 10 per share",
-          details: "Interim dividend for FY26",
-        },
-        {
-          symbol: "TCS",
-          company: "Tata Consultancy Services Ltd",
-          actionType: "dividend",
-          exDate: "2026-05-20",
-          recordDate: "2026-05-21",
-          purpose: "Dividend - Rs 25 per share",
-          details: "Final dividend for FY25",
-        },
-        {
-          symbol: "INFY",
-          company: "Infosys Ltd",
-          actionType: "split",
-          exDate: "2026-06-01",
-          recordDate: undefined,
-          purpose: "Stock Split - 1:2",
-          details: "Sub-division of equity shares",
-        },
-      ],
+      actions: [],
+      source: "error",
       timestamp: Date.now(),
     });
   }
-}
-
-function determineActionType(purpose: string): "dividend" | "split" | "bonus" | "rights" | "buyback" {
-  const lower = purpose.toLowerCase();
-  if (lower.includes("dividend")) return "dividend";
-  if (lower.includes("split")) return "split";
-  if (lower.includes("bonus")) return "bonus";
-  if (lower.includes("rights")) return "rights";
-  if (lower.includes("buyback") || lower.includes("buy-back")) return "buyback";
-  return "dividend"; // default
 }

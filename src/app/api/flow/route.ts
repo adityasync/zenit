@@ -1,64 +1,75 @@
 import { NextResponse } from 'next/server';
+import { fetchGrowwOptionChain, type GrowwResult } from '@/lib/yahoo';
+
+function analyzeFlow(data: GrowwResult) {
+  const { spotPrice, strikes } = data;
+
+  // Find ATM strike
+  let atmStrike = 0;
+  let minDiff = Infinity;
+  for (const s of strikes) {
+    const diff = Math.abs(s.strike - spotPrice);
+    if (diff < minDiff) { minDiff = diff; atmStrike = s.strike; }
+  }
+
+  // Process ±10 strikes around ATM
+  const step = atmStrike > 20000 ? 100 : 50;
+  const relevant = strikes.filter(
+    (s) => Math.abs(s.strike - atmStrike) <= 10 * step
+  );
+
+  let totalCEOI = 0;
+  let totalPEOI = 0;
+  let callVolume = 0;
+  let putVolume = 0;
+
+  for (const s of relevant) {
+    totalCEOI += s.ce.oi;
+    totalPEOI += s.pe.oi;
+    callVolume += s.ce.volume;
+    putVolume += s.pe.volume;
+  }
+
+  const totalVol = callVolume + putVolume;
+  const delta = totalVol > 0 ? ((callVolume - putVolume) / totalVol * 100) : 0;
+  const pcr = totalCEOI > 0 ? (totalPEOI / totalCEOI) : 0;
+
+  return {
+    symbol: data.symbol,
+    callVolume,
+    putVolume,
+    callOI: totalCEOI,
+    putOI: totalPEOI,
+    pcr: pcr.toFixed(2),
+    delta: parseFloat(delta.toFixed(1)),
+    impliedVol: '0',
+    spotPrice,
+    timestamp: Date.now(),
+    source: 'groww',
+  };
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get('symbol') || 'NIFTY';
-  
-  try {
-    // Get option chain data from Yahoo for order flow analysis
-    const res = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/options/${encodeURIComponent(symbol)}`,
-      { headers: { 'User-Agent': 'Mozilla/5.0' } }
-    );
-    
-    if (!res.ok) throw new Error('Yahoo failed');
-    
-    const data = await res.json();
-    const options = data?.optionChain?.result?.[0];
-    
-    if (!options) throw new Error('No options data');
-    
-    const calls = options.calls || [];
-    const puts = options.puts || [];
-    
-    // Calculate order flow (Delta)
-    let buyVol = 0, sellVol = 0;
-    
-    calls.forEach((opt: any) => {
-      if (opt.volume > opt.openInterest) buyVol += opt.volume;
-      else sellVol += opt.volume;
-    });
-    
-    puts.forEach((opt: any) => {
-      if (opt.volume > opt.openInterest) buyVol += opt.volume;
-      else sellVol += opt.volume;
-    });
-    
-    const total = buyVol + sellVol;
-    const delta = total > 0 ? ((buyVol - sellVol) / total * 100).toFixed(1) : '0';
-    
-    // Calculate PCR from OI
-    const callOI = calls.reduce((sum: number, c: any) => sum + (c.openInterest || 0), 0);
-    const putOI = puts.reduce((sum: number, c: any) => sum + (c.openInterest || 0), 0);
-    const pcr = callOI > 0 ? (putOI / callOI).toFixed(2) : '0';
-    
-    // Get implied vol (ATM)
-    const atmCall = calls.find((c: any) => c.inTheMoney === false);
-    const iv = atmCall?.impliedVolatility || 0;
-    
-    return NextResponse.json({
-      symbol,
-      callVolume: calls.reduce((sum: number, c: any) => sum + (c.volume || 0), 0),
-      putVolume: puts.reduce((sum: number, c: any) => sum + (c.volume || 0), 0),
-      callOI,
-      putOI,
-      pcr,
-      delta: parseFloat(delta),
-      impliedVol: (iv * 100).toFixed(1),
-      timestamp: Date.now()
-    });
-  } catch (e) {
-    console.error('Options fetch error:', e);
-    return NextResponse.json({ error: true }, { status: 503 });
+
+  const data = await fetchGrowwOptionChain(symbol);
+
+  if (data) {
+    return NextResponse.json(analyzeFlow(data));
   }
+
+  return NextResponse.json({
+    symbol,
+    callVolume: 0,
+    putVolume: 0,
+    callOI: 0,
+    putOI: 0,
+    pcr: '0',
+    delta: 0,
+    impliedVol: '0',
+    timestamp: Date.now(),
+    source: 'unavailable',
+    message: 'Options flow data unavailable.',
+  });
 }

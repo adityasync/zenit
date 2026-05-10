@@ -1,51 +1,9 @@
 import { NextRequest } from "next/server";
 import { getMarketNews } from "@/lib/news";
+import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-const YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart";
-const CACHE = new Map<string, { data: unknown; expiry: number }>();
-
-// Use Yahoo Finance for live data
-async function fetchYahooQuote(symbol: string): Promise<{
-  price: number;
-  change: number;
-  percentChange: number;
-  volume: number;
-} | null> {
-  try {
-    const res = await fetch(`${YAHOO_API}/${symbol}.NS?interval=1d`, {
-      signal: AbortSignal.timeout(3000)
-    });
-    if (!res.ok) return null;
-    
-    const data = await res.json();
-    const result = data.chart?.result?.[0];
-    if (!result) return null;
-    
-    const meta = result.meta;
-    const quote = result.indicators?.quote?.[0];
-    
-    if (!meta || !quote) return null;
-    
-    // Yahoo provides current price in meta.regularMarketPrice
-    // and the previous close in meta.chartPreviousClose
-    const price = meta.regularMarketPrice || meta.previousClose;
-    const prevClose = meta.chartPreviousClose || meta.previousClose;
-    const change = price - prevClose;
-    const percentChange = prevClose > 0 ? (change / prevClose) * 100 : 0;
-    
-    return {
-      price,
-      change,
-      percentChange,
-      volume: meta.regularMarketVolume || 0
-    };
-  } catch {
-    return null;
-  }
-}
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -57,11 +15,6 @@ function isMarketOpen(): boolean {
   if (day === 0 || day === 6) return false;
   const totalMinutes = hour * 60 + minute;
   return totalMinutes >= 555 && totalMinutes <= 930;
-}
-
-// Legacy function - kept for compatibility
-async function fetchAPI<T>(path: string, cacheTTL = 5000): Promise<T | null> {
-  return null;
 }
 
 interface IndexData {
@@ -157,7 +110,7 @@ function getAllSymbols(): string[] {
     "BAJFINANCE","TATASTEEL","WIPRO","HCLTECH","TECHM","AXISBANK",
     "NTPC","POWERGRID","ONGC","COALINDIA","TATAMOTORS","DRREDDY",
     "CIPLA","BPCL","LUPIN","JSWSTEEL","HINDALCO","VEDL","DLF","NESTLEIND",
-    "INDUSIND","GODREJPRO","OBEROIRLTY","NESTLEIND","ULTRACEMCO"
+    "INDUSIND","GODREJPRO","OBEROIRLTY","ULTRACEMCO"
   ];
 }
 
@@ -176,34 +129,28 @@ interface StockData {
   company_name: string;
 }
 
-// Fetch stock data using Yahoo Finance - LIVE real-time data
+// Fetch stock data using shared Yahoo Finance batch fetcher
 async function fetchBatchStocks(symbols: string[]): Promise<Map<string, StockData>> {
-  const result = new Map<string, StockData>();
+  const chartMap = await fetchChartBatch(symbols, { batchSize: 10, batchDelayMs: 100, timeoutMs: 3000 });
 
-  // Process in smaller chunks for Yahoo
-  for (const symbol of symbols) {
-    try {
-      const quote = await fetchYahooQuote(symbol);
-      if (quote) {
-        result.set(symbol, {
-          symbol,
-          last_price: quote.price,
-          change: quote.change,
-          percent_change: quote.percentChange,
-          volume: quote.volume,
-          market_cap: 0,
-          sector: "",
-          open: quote.price - quote.change,
-          day_high: quote.price * 1.01,
-          day_low: quote.price * 0.99,
-          previous_close: quote.price - quote.change,
-          company_name: symbol,
-        });
-      }
-    } catch {
-      // Skip failed symbols
-    }
-  }
+  const result = new Map<string, StockData>();
+  chartMap.forEach((chart, symbol) => {
+    const q = normalizeChartQuote(chart);
+    result.set(symbol, {
+      symbol,
+      last_price: q.price,
+      change: q.change,
+      percent_change: q.percentChange,
+      volume: q.volume,
+      market_cap: 0,
+      sector: "",
+      open: q.price - q.change,
+      day_high: q.price * 1.01,
+      day_low: q.price * 0.99,
+      previous_close: q.previousClose,
+      company_name: q.shortName || symbol,
+    });
+  });
 
   return result;
 }
@@ -278,7 +225,6 @@ export async function GET(request: NextRequest) {
           // Fetch all needed stocks in one batch
           const allSymbols = getAllSymbols();
           const stockData = await fetchBatchStocks(allSymbols);
-          const hasLiveData = stockData.size > 0;
 
           // ── Indices ──
           let indices: IndexData[] = [];

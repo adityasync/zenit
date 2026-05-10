@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-
-const YAHOO_FINANCE_API = "https://query1.finance.yahoo.com/v8/finance/chart";
+import { fetchChart, extractCandles } from "@/lib/yahoo";
 
 export const dynamic = "force-dynamic";
 
@@ -15,29 +14,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Symbol required" }, { status: 400 });
     }
 
-    const res = await fetch(
-      `${YAHOO_FINANCE_API}/${symbol}.NS?range=${range}&interval=${interval}`,
-      { signal: AbortSignal.timeout(15000) }
-    );
-
-    if (!res.ok) throw new Error("Yahoo API error");
-
-    const data = await res.json();
-    const result = data.chart?.result?.[0];
+    const result = await fetchChart(symbol, { interval, range, timeoutMs: 15000, useCache: false });
     if (!result) throw new Error("No data found");
 
-    const timestamps = result.timestamp || [];
-    const quotes = result.indicators?.quote?.[0] || {};
-    const { open = [], high = [], low = [], close = [], volume = [] } = quotes;
+    const candles = extractCandles(result);
 
-    // Generate CSV
     let csv = "Date,Open,High,Low,Close,Volume\n";
-
-    for (let i = 0; i < timestamps.length; i++) {
-      if (open[i] != null && close[i] != null) {
-        const date = new Date(timestamps[i] * 1000).toISOString().split("T")[0];
-        csv += `${date},${open[i]},${high[i]},${low[i]},${close[i]},${volume[i] || 0}\n`;
-      }
+    for (const c of candles) {
+      const date = new Date(c.time).toISOString().split("T")[0];
+      csv += `${date},${c.open},${c.high},${c.low},${c.close},${c.volume}\n`;
     }
 
     return new NextResponse(csv, {

@@ -1,91 +1,110 @@
 import { NextResponse } from 'next/server';
+import { fetchGrowwOptionChain, type GrowwResult } from '@/lib/yahoo';
 
-async function fetchNSEOptionChain(symbol: string) {
-  const nseSymbol = symbol === 'NIFTY' ? 'NIFTY' : symbol === 'BANKNIFTY' ? 'BANKNIFTY' : 'NIFTY';
-  
-  try {
-    const res = await fetch(
-      `https://www.nseindia.com/api/option-chain-indices?symbol=${nseSymbol}`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json',
-        }
-      }
-    );
-    
-    if (!res.ok) return null;
-    
-    const data = await res.json();
-    return data;
-  } catch (e) {
-    return null;
-  }
-}
+function calculatePCR(data: GrowwResult) {
+  let totalCEOI = 0;
+  let totalPEOI = 0;
+  let maxPain = 0;
+  let maxPainOI = 0;
 
-function calculatePCR(data: any) {
-  if (!data?.records) return null;
-  
-  try {
-    const strikes = data.records;
-    let totalCEOI = 0;
-    let totalPEOI = 0;
-    let maxPain = 0;
-    let maxPainOI = 0;
-    
-    const processedStrikes = [];
-    
-    for (const record of strikes) {
-      const strikePrice = record.strikePrice;
-      const ceOI = record.CE?.openInterest || 0;
-      const peOI = record.PE?.openInterest || 0;
-      
-      totalCEOI += ceOI;
-      totalPEOI += peOI;
-      
-      const totalOI = ceOI + peOI;
-      if (totalOI > maxPainOI) {
-        maxPainOI = totalOI;
-        maxPain = strikePrice;
-      }
-      
-      processedStrikes.push({
-        strike: strikePrice,
-        ce: { ltp: record.CE?.lastPrice || 0, oi: ceOI, oiChange: record.CE?.changeinOpenInterest || 0, volume: record.CE?.totalTradedVolume || 0 },
-        pe: { ltp: record.PE?.lastPrice || 0, oi: peOI, oiChange: record.PE?.changeinOpenInterest || 0, volume: record.PE?.totalTradedVolume || 0 }
-      });
-      
-      if (processedStrikes.length >= 15) break;
+  // Find ATM strike (closest to spot price)
+  let atmStrike = 0;
+  let minDiff = Infinity;
+  for (const s of data.strikes) {
+    const diff = Math.abs(s.strike - data.spotPrice);
+    if (diff < minDiff) {
+      minDiff = diff;
+      atmStrike = s.strike;
     }
-    
-    return {
-      symbol: data.underlying || 'NIFTY',
-      spotPrice: data.records?.[5]?.underlyingValue || 0,
-      pcr: totalPEOI > 0 ? (totalPEOI / totalCEOI).toFixed(2) : '1.00',
-      maxPain,
-      strikes: processedStrikes,
-      totalCEOI,
-      totalPEOI
-    };
-  } catch (e) {
-    return null;
   }
+
+  // Process ±7 strikes around ATM
+  const step = atmStrike > 20000 ? 100 : 50;
+  const relevant = data.strikes.filter(
+    (s) => Math.abs(s.strike - atmStrike) <= 7 * step
+  );
+
+  for (const s of relevant) {
+    totalCEOI += s.ce.oi;
+    totalPEOI += s.pe.oi;
+    const totalOI = s.ce.oi + s.pe.oi;
+    if (totalOI > maxPainOI) {
+      maxPainOI = totalOI;
+      maxPain = s.strike;
+    }
+  }
+
+  // Map to the shape the OptionsChain component expects
+  const chain = relevant.map((s) => ({
+    strike: s.strike,
+    isATM: s.strike === atmStrike,
+    ce: {
+      strikePrice: s.strike,
+      openInterest: s.ce.oi,
+      changeinOpenInterest: s.ce.oiChange,
+      totalTradedVolume: s.ce.volume,
+      impliedVolatility: 0,
+      lastPrice: s.ce.ltp,
+      change: 0,
+      pChange: 0,
+      bidprice: 0,
+      askPrice: 0,
+    },
+    pe: {
+      strikePrice: s.strike,
+      openInterest: s.pe.oi,
+      changeinOpenInterest: s.pe.oiChange,
+      totalTradedVolume: s.pe.volume,
+      impliedVolatility: 0,
+      lastPrice: s.pe.ltp,
+      change: 0,
+      pChange: 0,
+      bidprice: 0,
+      askPrice: 0,
+    },
+  }));
+
+  chain.sort((a, b) => a.strike - b.strike);
+
+  return {
+    symbol: data.symbol,
+    underlyingValue: data.spotPrice,
+    expiryDates: data.expiryDates.slice(0, 4),
+    currentExpiry: data.currentExpiry,
+    atmStrike,
+    pcr: totalPEOI > 0 ? parseFloat((totalPEOI / totalCEOI).toFixed(2)) : 1.0,
+    maxPain,
+    maxPainOI,
+    totalPEOI,
+    totalCEOI,
+    chain,
+    timestamp: Date.now(),
+  };
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get('symbol') || 'NIFTY';
-  
-  const nseData = await fetchNSEOptionChain(symbol);
-  
-  if (nseData) {
-    const result = calculatePCR(nseData);
-    if (result) return NextResponse.json(result);
+
+  const data = await fetchGrowwOptionChain(symbol);
+
+  if (data) {
+    return NextResponse.json(calculatePCR(data));
   }
-  
-  // Return error - no mock data
-  return NextResponse.json(
-    { error: 'Live data unavailable. Market may be closed.' },
-    { status: 503 }
-  );
+
+  return NextResponse.json({
+    symbol,
+    underlyingValue: 0,
+    pcr: 0,
+    maxPain: 0,
+    maxPainOI: 0,
+    totalPEOI: 0,
+    totalCEOI: 0,
+    atmStrike: 0,
+    chain: [],
+    expiryDates: [],
+    timestamp: Date.now(),
+    source: 'unavailable',
+    message: 'Options data unavailable.',
+  });
 }

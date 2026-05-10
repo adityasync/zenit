@@ -1,120 +1,36 @@
 import { NextResponse } from "next/server";
-import { redis, getCachedData, setCachedData } from "@/lib/redis";
 
-// FII/DII data is only available AFTER market close (~8:30 PM IST daily)
-// We'll fetch from multiple free sources
+export const dynamic = "force-dynamic";
 
-const SECTOR_LIST = [
-  "BFSI", "IT", "Auto", "Pharma", "Metal", "FMCG", "Energy", "Realty"
-];
+const MRCHARTIST = "https://fii-diidata.mrchartist.com";
+const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
-async function getFIIIData() {
-  const sources = [
-    { url: 'https://fii-diidata.mrchartist.com/api/data', parser: (d: any) => d },
-    { url: 'https://optionx.trade/fii-dii-activity', parser: null },
-  ];
+async function fetchJson(path: string, ttlMs: number): Promise<Record<string, unknown> | null> {
+  const cached = CACHE.get(path);
+  if (cached && cached.expiry > Date.now()) return cached.data as Record<string, unknown>;
 
-  for (const src of sources) {
-    try {
-      const res = await fetch(src.url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(8000)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return src.parser ? src.parser(data) : data;
-      }
-    } catch (e) {
-      console.warn('FII source failed:', src.url);
-      continue;
-    }
-  }
-  return null;
-}
-
-// Generate sector-wise flows (derived from overall FII/DII data + sector performance)
-function generateSectorFlows(fiiNet: number, diiNet: number) {
-  const flows = [];
-
-  for (const sector of SECTOR_LIST) {
-    // Distribute flows across sectors based on typical allocation patterns
-    const weight = getSectorWeight(sector);
-    const fiiSectorFlow = Math.round(fiiNet * weight * (0.8 + Math.random() * 0.4));
-    const diiSectorFlow = Math.round(diiNet * weight * (0.8 + Math.random() * 0.4));
-
-    flows.push({
-      sector,
-      fiiFlow: fiiSectorFlow,
-      diiFlow: diiSectorFlow,
-      netFlow: fiiSectorFlow + diiSectorFlow,
-      trend: fiiSectorFlow + diiSectorFlow > 0 ? "inflow" : "outflow"
+  try {
+    const res = await fetch(`${MRCHARTIST}${path}`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
     });
+    if (!res.ok) return null;
+    const data = await res.json();
+    CACHE.set(path, { data, expiry: Date.now() + ttlMs });
+    return data;
+  } catch {
+    return null;
   }
-
-  return flows.sort((a, b) => b.netFlow - a.netFlow);
 }
 
-function getSectorWeight(sector: string): number {
-  const weights: Record<string, number> = {
-    "BFSI": 0.30,
-    "IT": 0.18,
-    "Auto": 0.10,
-    "Pharma": 0.08,
-    "Metal": 0.08,
-    "FMCG": 0.10,
-    "Energy": 0.10,
-    "Realty": 0.06,
-  };
-  return weights[sector] || 0.05;
-}
-
-// Get historical data from Redis or generate mock
-async function getHistoricalData(days: number = 30) {
-  const cacheKey = "fiidii:history";
-  const cached = await getCachedData<any[]>(cacheKey);
-
-  if (cached && cached.length > 0) {
-    return cached.slice(-days);
-  }
-
-  // Generate mock historical data
-  const history = [];
-  const today = new Date();
-
-  for (let i = days; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-
-    const fiiNet = Math.round((Math.random() - 0.4) * 3000); // -3000 to +1500
-    const diiNet = Math.round((Math.random() - 0.3) * 2000); // -2000 to +1400
-
-    history.push({
-      date: date.toISOString().split('T')[0],
-      fiiNet,
-      diiNet,
-      fiiBuy: Math.abs(fiiNet) + Math.round(Math.random() * 5000),
-      fiiSell: Math.round(Math.random() * 5000),
-      diiBuy: Math.abs(diiNet) + Math.round(Math.random() * 3000),
-      diiSell: Math.round(Math.random() * 3000),
-    });
-  }
-
-  // Cache for 1 day
-  await setCachedData(cacheKey, history, 86400);
-  return history;
-}
-
-function getLocalTime() {
-  return new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-}
-
-function isMarketClosed() {
-  const now = new Date();
-  const hour = now.getHours();
-  const day = now.getDay();
-  if (day === 0 || day === 6) return true;
-  if (hour >= 9 && hour < 16) return false;
-  return true;
+interface SectorFlow {
+  sector: string;
+  name: string;
+  netFlow: number;
+  trend: "inflow" | "outflow";
+  percentChange: number;
+  fiiOwn: number;
+  alpha: number;
 }
 
 export async function GET(request: Request) {
@@ -122,69 +38,82 @@ export async function GET(request: Request) {
   const historyDays = parseInt(searchParams.get("history") || "30");
   const includeSectors = searchParams.get("sectors") !== "false";
 
-  const date = new Date().toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  });
+  const [data, history, sectors] = await Promise.all([
+    fetchJson("/api/data", 30_000),
+    fetchJson("/api/history", 60_000),
+    includeSectors ? fetchJson("/api/sectors", 300_000) : Promise.resolve(null),
+  ]);
 
-  // Try to fetch from free sources
-  const data = await getFIIIData();
-
-  // Get historical data
-  const history = await getHistoricalData(historyDays);
-
-  if (data) {
-    const fiiNet = data.fii_net || 0;
-    const diiNet = data.dii_net || 0;
-
-    const response: any = {
-      fii: {
-        net: fiiNet,
-        buyValue: data.fii_buy || 0,
-        sellValue: data.fii_sell || 0,
-        index: data.fii_idx_fut_net || 0,
-        cash: data.fii_stk_fut_net || 0,
-        fn: data.fii_idx_fut_net || 0
-      },
-      dii: {
-        net: diiNet,
-        buyValue: data.dii_buy || 0,
-        sellValue: data.dii_sell || 0,
-        index: data.dii_idx_fut_net || 0,
-        cash: data.dii_stk_fut_net || 0,
-        fn: data.dii_idx_fut_net || 0
-      },
-      history: history.slice(-historyDays),
-      date,
+  if (!data) {
+    return NextResponse.json({
+      fii: { net: 0, buyValue: 0, sellValue: 0, index: 0, cash: 0, fn: 0 },
+      dii: { net: 0, buyValue: 0, sellValue: 0, index: 0, cash: 0, fn: 0 },
+      history: [],
+      date: new Date().toLocaleDateString("en-IN"),
       timestamp: Date.now(),
-      status: 'live'
-    };
-
-    if (includeSectors) {
-      response.sectorFlows = generateSectorFlows(fiiNet, diiNet);
-    }
-
-    return NextResponse.json(response);
+      status: "unavailable",
+      source: "unavailable",
+    });
   }
 
-  // Before market close or if no data - show unavailable
-  const closed = isMarketClosed();
+  const fiiNet = (data.fii_net as number) || 0;
+  const diiNet = (data.dii_net as number) || 0;
 
-  const response: any = {
-    fii: { net: 0, buyValue: 0, sellValue: 0, index: 0, cash: 0, fn: 0 },
-    dii: { net: 0, buyValue: 0, sellValue: 0, index: 0, cash: 0, fn: 0 },
-    history: history.slice(-historyDays),
-    date,
+  // History from mrchartist (60 days of real data)
+  const historyArr = Array.isArray(history) ? history : [];
+  const mappedHistory = historyArr
+    .slice(-historyDays)
+    .map((h: Record<string, unknown>) => ({
+      date: (h.date as string) || "",
+      fiiNet: (h.fii_net as number) || 0,
+      diiNet: (h.dii_net as number) || 0,
+      fiiBuy: (h.fii_buy as number) || 0,
+      fiiSell: (h.fii_sell as number) || 0,
+      diiBuy: (h.dii_buy as number) || 0,
+      diiSell: (h.dii_sell as number) || 0,
+    }));
+
+  // Parse date from mrchartist (format: "08-May-2026")
+  const dateStr = (data.date as string) || "";
+
+  const response: Record<string, unknown> = {
+    fii: {
+      net: fiiNet,
+      buyValue: (data.fii_buy as number) || 0,
+      sellValue: (data.fii_sell as number) || 0,
+      index: (data.fii_idx_fut_net as number) || 0,
+      cash: (data.fii_stk_fut_net as number) || 0,
+      fn: (data.fii_idx_fut_net as number) || 0,
+    },
+    dii: {
+      net: diiNet,
+      buyValue: (data.dii_buy as number) || 0,
+      sellValue: (data.dii_sell as number) || 0,
+      index: (data.dii_idx_fut_net as number) || 0,
+      cash: (data.dii_stk_fut_net as number) || 0,
+      fn: (data.dii_idx_fut_net as number) || 0,
+    },
+    history: mappedHistory,
+    date: dateStr,
     timestamp: Date.now(),
-    status: closed ? 'closed' : 'unavailable',
-    message: closed
-      ? `FII/DII data updates after market close (~8:30 PM IST)`
-      : `Waiting for institutional data...`
+    status: "live",
+    source: "mrchartist",
   };
 
-  if (includeSectors) {
-    response.sectorFlows = generateSectorFlows(0, 0);
+  if (includeSectors && Array.isArray(sectors)) {
+    const sectorFlows: SectorFlow[] = sectors.map((s: Record<string, unknown>) => {
+      const fortnightCr = (s.fortnightCr as number) || 0;
+      return {
+        sector: (s.name as string) || "",
+        name: (s.name as string) || "",
+        netFlow: fortnightCr,
+        trend: fortnightCr >= 0 ? "inflow" : "outflow",
+        percentChange: 0,
+        fiiOwn: (s.fiiOwn as number) || 0,
+        alpha: (s.alpha as number) || 0,
+      };
+    });
+    response.sectorFlows = sectorFlows;
   }
 
   return NextResponse.json(response);

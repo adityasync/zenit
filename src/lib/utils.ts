@@ -5,7 +5,8 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatNumber(num: number, decimals: number = 2): string {
+export function formatNumber(num: number | undefined | null, decimals: number = 2): string {
+  if (num == null || isNaN(num)) return "0";
   return num.toFixed(decimals);
 }
 

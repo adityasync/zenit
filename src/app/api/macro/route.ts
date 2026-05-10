@@ -1,149 +1,240 @@
 import { NextResponse } from "next/server";
-
-const YAHOO_API = "https://query1.finance.yahoo.com/v8/finance/chart";
+import { fetchChart } from "@/lib/yahoo";
 
 export const dynamic = "force-dynamic";
 
-// Fetch Indian macro indicators
-async function fetchMacroIndicators() {
+const WORLD_BANK_API = "https://api.worldbank.org/v2";
+const CACHE = new Map<string, { data: unknown; expiry: number }>();
+
+// ─── World Bank: CPI, GDP, Growth ─────────────────────────────────
+
+interface WorldBankIndicator {
+  value: number | null;
+  year: string;
+}
+
+async function fetchWorldBankIndicator(
+  indicator: string,
+  years = 5
+): Promise<WorldBankIndicator[]> {
+  const cacheKey = `wb:${indicator}`;
+  const cached = CACHE.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data as WorldBankIndicator[];
+  }
+
   try {
-    // Fetch USD/INR for FX context
-    const fxRes = await fetch(`${YAHOO_API}/INR%3DX?interval=1d&range=1d`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    const fxData = await fxRes.json();
-    const usdInr = fxData.chart?.result?.[0]?.meta?.regularMarketPrice || 83.5;
-
-    // Mock macro data (in production, fetch from RBI API or data providers)
-    const currentMonth = new Date().toLocaleString('en-IN', { month: 'short', timeZone: 'Asia/Kolkata' });
     const currentYear = new Date().getFullYear();
+    const fromYear = currentYear - years;
+    const res = await fetch(
+      `${WORLD_BANK_API}/country/IND/indicator/${indicator}?format=json&date=${fromYear}:${currentYear}&per_page=${years}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
 
-    return {
-      iip: {
-        value: 148.2,
-        growth: 4.2,
-        month: `${currentMonth} ${currentYear}`,
-        previous: 3.8,
-      },
-      cpi: {
-        value: 182.1,
-        cpiInflation: 4.85,
-        month: `${currentMonth} ${currentYear}`,
-        previous: 5.1,
-        foodInflation: 5.2,
-        coreInflation: 4.3,
-      },
-      rbiRates: {
-        repo: 6.5,
-        reverseRepo: 3.35,
-        crr: 4.5,
-        slr: 18.0,
-        msf: 6.75,
-        bankRate: 6.75,
-        updated: "2024-12-06", // Last RBI policy date
-        nextPolicy: "2026-06-06", // Next policy date
-      },
-      fx: {
-        usdInr: Number(usdInr.toFixed(2)),
-        eurInr: Number((usdInr * 0.92).toFixed(2)),
-        gbpInr: Number((usdInr * 0.79).toFixed(2)),
-        yenInr: Number((usdInr * 0.0068).toFixed(2)),
-        change: 0.12,
-      },
-    };
-  } catch (error) {
-    console.error("Macro indicators fetch error:", error);
-    return getDefaultMacro();
+    if (!res.ok) return [];
+
+    const json = await res.json();
+    const records = json?.[1] || [];
+
+    const result: WorldBankIndicator[] = records
+      .filter((r: Record<string, unknown>) => r.value !== null)
+      .map((r: Record<string, unknown>) => ({
+        value: r.value as number,
+        year: r.date as string,
+      }));
+
+    CACHE.set(cacheKey, { data: result, expiry: Date.now() + 86400000 }); // 24h cache
+    return result;
+  } catch {
+    return [];
   }
 }
 
-function getDefaultMacro() {
+async function fetchMacroFromWorldBank() {
+  const [cpiData, gdpGrowthData, gdpData] = await Promise.all([
+    fetchWorldBankIndicator("FP.CPI.TOTL.ZG"), // CPI inflation %
+    fetchWorldBankIndicator("NY.GDP.MKTP.KD.ZG"), // GDP growth %
+    fetchWorldBankIndicator("NY.GDP.MKTP.CD"), // GDP current USD
+  ]);
+
   return {
-    iip: { value: 148.2, growth: 4.2, month: "Apr 2026", previous: 3.8 },
-    cpi: { value: 182.1, cpiInflation: 4.85, month: "Apr 2026", previous: 5.1, foodInflation: 5.2, coreInflation: 4.3 },
-    rbiRates: { repo: 6.5, reverseRepo: 3.35, crr: 4.5, slr: 18.0, msf: 6.75, bankRate: 6.75, updated: "2024-12-06", nextPolicy: "2026-06-06" },
-    fx: { usdInr: 83.45, eurInr: 76.77, gbpInr: 65.92, yenInr: 0.57, change: 0.12 },
+    cpi: cpiData.length > 0 ? {
+      inflation: cpiData[0].value,
+      year: cpiData[0].year,
+      previous: cpiData.length > 1 ? cpiData[1].value : null,
+      history: cpiData.slice(0, 5),
+    } : null,
+    gdp: gdpGrowthData.length > 0 ? {
+      growth: gdpGrowthData[0].value,
+      year: gdpGrowthData[0].year,
+      previous: gdpGrowthData.length > 1 ? gdpGrowthData[1].value : null,
+      history: gdpGrowthData.slice(0, 5),
+    } : null,
+    gdpValue: gdpData.length > 0 ? {
+      value: gdpData[0].value,
+      year: gdpData[0].year,
+      valueTrillion: gdpData[0].value ? (gdpData[0].value / 1e12).toFixed(2) : null,
+    } : null,
   };
 }
 
-// IPO Calendar with Grey Market Premium
-async function fetchIPOCalendar() {
-  // Mock IPO data (in production, fetch from NSE/BSE or Chittorgarh API)
-  const today = new Date();
-  const ipos = [
-    {
-      company: "Sky Enterprises Ltd",
-      openDate: new Date(today.getTime() + 7 * 86400000).toISOString().split("T")[0],
-      closeDate: new Date(today.getTime() + 10 * 86400000).toISOString().split("T")[0],
-      priceBand: "₹180-190",
-      lotSize: 78,
-      gmp: 45,
-      gmpPercent: 23.7,
-      listingDate: new Date(today.getTime() + 18 * 86400000).toISOString().split("T")[0],
-      status: "upcoming" as const,
-      issueSize: "₹450 Cr",
-      industry: "Infrastructure",
-    },
-    {
-      company: "TechVision Innovation Ltd",
-      openDate: new Date(today.getTime() - 2 * 86400000).toISOString().split("T")[0],
-      closeDate: new Date(today.getTime() + 1 * 86400000).toISOString().split("T")[0],
-      priceBand: "₹420-440",
-      lotSize: 34,
-      gmp: 85,
-      gmpPercent: 19.3,
-      listingDate: new Date(today.getTime() + 9 * 86400000).toISOString().split("T")[0],
-      status: "open" as const,
-      issueSize: "₹1,200 Cr",
-      industry: "Technology",
-    },
-    {
-      company: "GreenEnergy Power Ltd",
-      openDate: new Date(today.getTime() - 10 * 86400000).toISOString().split("T")[0],
-      closeDate: new Date(today.getTime() - 7 * 86400000).toISOString().split("T")[0],
-      priceBand: "₹310-325",
-      lotSize: 46,
-      gmp: 0,
-      gmpPercent: 0,
-      listingDate: new Date(today.getTime() - 3 * 86400000).toISOString().split("T")[0],
-      status: "listed" as const,
-      listingPrice: 348,
-      listingGain: 7.1,
-      issueSize: "₹800 Cr",
-      industry: "Renewable Energy",
-    },
-    {
-      company: "MediCare Plus Ltd",
-      openDate: new Date(today.getTime() + 14 * 86400000).toISOString().split("T")[0],
-      closeDate: new Date(today.getTime() + 17 * 86400000).toISOString().split("T")[0],
-      priceBand: "₹250-265",
-      lotSize: 56,
-      gmp: null,
-      gmpPercent: null,
-      listingDate: new Date(today.getTime() + 25 * 86400000).toISOString().split("T")[0],
-      status: "upcoming" as const,
-      issueSize: "₹600 Cr",
-      industry: "Healthcare",
-    },
+// ─── Yahoo Finance: FX rates ──────────────────────────────────────
+
+async function fetchFXRates() {
+  const cacheKey = "fx:rates";
+  const cached = CACHE.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data as Record<string, number>;
+  }
+
+  const pairs = [
+    { symbol: "INR=X", name: "usdInr" },
+    { symbol: "EURINR=X", name: "eurInr" },
+    { symbol: "GBPINR=X", name: "gbpInr" },
+    { symbol: "JPYINR=X", name: "jpyInr" },
   ];
 
-  return ipos;
+  const rates: Record<string, number> = {};
+
+  await Promise.allSettled(
+    pairs.map(async (pair) => {
+      const result = await fetchChart(pair.symbol, { interval: "1d", range: "5d", cacheTtlMs: 60_000 });
+      if (result) {
+        const price = result.meta.regularMarketPrice;
+        if (price) rates[pair.name] = Number(price.toFixed(4));
+      }
+    })
+  );
+
+  if (Object.keys(rates).length > 0) {
+    CACHE.set(cacheKey, { data: rates, expiry: Date.now() + 60000 });
+  }
+
+  return rates;
+}
+
+// ─── RBI Rates (scraped from public sources) ──────────────────────
+
+async function fetchRBIRates() {
+  const cacheKey = "rbi:rates";
+  const cached = CACHE.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data;
+  }
+
+  // Try to fetch from RBI website
+  try {
+    const res = await fetch("https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (res.ok) {
+      const html = await res.text();
+      // Try to extract repo rate from the page
+      const repoMatch = html.match(/repo\s*rate[^0-9]*(\d+\.?\d*)/i);
+      if (repoMatch) {
+        const repo = parseFloat(repoMatch[1]);
+        const result = {
+          repo,
+          reverseRepo: repo - 0.25,
+          crr: 4.5,
+          slr: 18.0,
+          msf: repo + 0.25,
+          bankRate: repo + 0.25,
+          source: "rbi",
+        };
+        CACHE.set(cacheKey, { data: result, expiry: Date.now() + 86400000 });
+        return result;
+      }
+    }
+  } catch {
+    // fall through to defaults
+  }
+
+  // Known RBI rates (as of April 2025 policy)
+  const defaults = {
+    repo: 6.0,
+    reverseRepo: 3.35,
+    crr: 4.5,
+    slr: 18.0,
+    msf: 6.25,
+    bankRate: 6.25,
+    lastPolicyDate: "2025-04-09",
+    nextPolicyDate: "2025-06-06",
+    source: "default" as const,
+  };
+
+  CACHE.set(cacheKey, { data: defaults, expiry: Date.now() + 86400000 });
+  return defaults;
+}
+
+// ─── IIP (Index of Industrial Production) ─────────────────────────
+
+async function fetchIIP() {
+  const cacheKey = "iip:data";
+  const cached = CACHE.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data;
+  }
+
+  // Try World Bank industrial production growth
+  try {
+    const indicators = await fetchWorldBankIndicator("NV.IND.TOTL.KD.ZG", 3);
+    if (indicators.length > 0) {
+      const result = {
+        growth: indicators[0].value,
+        year: indicators[0].year,
+        previous: indicators.length > 1 ? indicators[1].value : null,
+        source: "worldbank",
+      };
+      CACHE.set(cacheKey, { data: result, expiry: Date.now() + 86400000 });
+      return result;
+    }
+  } catch {
+    // fall through
+  }
+
+  return {
+    growth: null,
+    year: new Date().getFullYear().toString(),
+    previous: null,
+    source: "unavailable",
+  };
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const type = searchParams.get("type") || "all"; // all, macro, ipo
+  const type = searchParams.get("type") || "all"; // all, macro, ipo, fx
 
   try {
-    const [macroData, ipoCalendar] = await Promise.all([
-      type !== "ipo" ? fetchMacroIndicators() : Promise.resolve(null),
-      type !== "macro" ? fetchIPOCalendar() : Promise.resolve(null),
+    const [worldBankData, fxRates, rbiRates, iip] = await Promise.all([
+      type !== "fx" && type !== "ipo" ? fetchMacroFromWorldBank() : Promise.resolve(null),
+      type !== "macro" && type !== "ipo" ? fetchFXRates() : Promise.resolve({}),
+      type !== "fx" && type !== "ipo" ? fetchRBIRates() : Promise.resolve(null),
+      type !== "fx" && type !== "ipo" ? fetchIIP() : Promise.resolve(null),
     ]);
 
-    const response: any = { timestamp: Date.now() };
+    const response: Record<string, unknown> = { timestamp: Date.now() };
 
-    if (macroData) response.macro = macroData;
-    if (ipoCalendar) response.ipoCalendar = ipoCalendar;
+    if (type !== "fx" && type !== "ipo") {
+      response.macro = {
+        cpi: worldBankData?.cpi || null,
+        gdp: worldBankData?.gdp || null,
+        gdpValue: worldBankData?.gdpValue || null,
+        iip,
+        rbiRates,
+      };
+    }
+
+    if (type !== "macro" && type !== "ipo") {
+      response.fx = {
+        ...fxRates,
+        source: Object.keys(fxRates).length > 0 ? "yahoo" : "unavailable",
+      };
+    }
 
     return NextResponse.json(response);
   } catch (error) {

@@ -1,19 +1,9 @@
 import { NextResponse } from "next/server";
+import { fetchChart, extractCandles, normalizeChartQuote } from "@/lib/yahoo";
 
 const STOCK_API = "http://65.0.104.9";
-const YAHOO_FINANCE_API = "https://query1.finance.yahoo.com/v8/finance/chart";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
-interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
-
-// Valid ranges and intervals
 const VALID_RANGES = ["5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"];
 const VALID_INTERVALS = ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"];
 
@@ -44,43 +34,6 @@ async function fetchCurrentPrice(symbol: string): Promise<{ price: number; isDel
   return null;
 }
 
-async function fetchHistoricalData(symbol: string, range: string = "3mo", interval: string = "1d"): Promise<Candle[]> {
-  try {
-    const res = await fetch(`${YAHOO_FINANCE_API}/${symbol}.NS?range=${range}&interval=${interval}`, {
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!res.ok) throw new Error("Yahoo API error");
-
-    const data = await res.json();
-    const result = data.chart?.result?.[0];
-    if (!result) return [];
-
-    const timestamps = result.timestamp || [];
-    const quotes = result.indicators?.quote?.[0] || {};
-    const { open = [], high = [], low = [], close = [], volume = [] } = quotes;
-
-    const candles: Candle[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-        if (open[i] != null && close[i] != null) {
-            candles.push({
-                time: timestamps[i] * 1000,
-                open: open[i],
-                high: high[i],
-                low: low[i],
-                close: close[i],
-                volume: volume[i] || 0
-            });
-        }
-    }
-
-    return candles;
-  } catch (error) {
-    console.error("Historical fetch error:", error);
-    return [];
-  }
-}
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol")?.toUpperCase().replace(".NS", "");
@@ -91,7 +44,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Symbol required" }, { status: 400 });
   }
 
-  // Validate parameters
   const validRange = VALID_RANGES.includes(range) ? range : "3mo";
   const validInterval = VALID_INTERVALS.includes(interval) ? interval : "1d";
 
@@ -101,32 +53,26 @@ export async function GET(request: Request) {
     return NextResponse.json(cached.data);
   }
 
-  console.log(`[HISTORY] Fetching data for: ${symbol} (${validRange}, ${validInterval})`);
-
-  const [currentPriceResult, candles] = await Promise.all([
-    fetchCurrentPrice(symbol).catch(err => {
-        console.error(`[HISTORY] Current price fetch failed for ${symbol}:`, err);
-        return null;
-    }),
-    fetchHistoricalData(symbol, validRange, validInterval).catch(err => {
-        console.error(`[HISTORY] Historical fetch failed for ${symbol}:`, err);
-        return [];
-    })
+  const [currentPriceResult, chartResult] = await Promise.all([
+    fetchCurrentPrice(symbol).catch(() => null),
+    fetchChart(symbol, { interval: validInterval, range: validRange, timeoutMs: 15000, cacheTtlMs: 600_000, useCache: false }).catch(() => null),
   ]);
+
+  const candles = chartResult ? extractCandles(chartResult) : [];
+  const lastClose = candles.length > 0 ? candles[candles.length - 1].close : 0;
 
   const response = {
     symbol,
     range: validRange,
     interval: validInterval,
     candles,
-    currentPrice: currentPriceResult?.price || (candles.length > 0 ? candles[candles.length - 1].close : 0),
+    currentPrice: currentPriceResult?.price || lastClose,
     isDelayed: currentPriceResult?.isDelayed || false,
     source: candles.length > 0 ? "yahoo-finance" : "none",
-    timestamp: Date.now()
+    timestamp: Date.now(),
   };
 
-  // Cache duration based on range
-  const cacheTime = validRange === "max" || validRange === "5y" ? 3600000 : 600000; // 1hr for long, 10min for short
+  const cacheTime = validRange === "max" || validRange === "5y" ? 3600000 : 600000;
   CACHE.set(cacheKey, { data: response, expiry: Date.now() + cacheTime });
 
   return NextResponse.json(response);
