@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
+import { getCachedData, setCachedData } from "@/lib/redis";
 
 const SECTOR_MAPPINGS: Record<string, string[]> = {
   'IT': ['TCS','INFY','WIPRO','HCLTECH','TECHM'],
-  'BFSI': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND'],
+  'BFSI': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSINDBK'],
   'AUTO': ['MARUTI','TATAMOTORS','BAJFINANCE'],
   'PHARMA': ['SUNPHARMA','DRREDDY','CIPLA','LUPIN'],
   'FMCG': ['HINDUNILVR','ITC','NESTLEIND','TITAN'],
@@ -13,9 +14,26 @@ const SECTOR_MAPPINGS: Record<string, string[]> = {
 };
 
 const INDEX_STOCKS: Record<string, string[]> = {
-  'nifty50': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL','WIPRO','HCLTECH'],
-  'banknifty': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSIND'],
-  'sensex': ['RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI','SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL'],
+  'nifty50': [
+    'ADANIENT','ADANIPORTS','APOLLOHOSP','ASIANPAINT','AXISBANK',
+    'BAJAJ-AUTO','BAJFINANCE','BAJAJFINSV','BHARTIARTL','BPCL',
+    'BRITANNIA','CIPLA','COALINDIA','DIVISLAB','DRREDDY',
+    'EICHERMOT','GRASIM','HCLTECH','HDFCBANK','HDFCLIFE',
+    'HEROMOTOCO','HINDALCO','HINDUNILVR','ICICIBANK','INDUSINDBK',
+    'INFY','ITC','JSWSTEEL','KOTAKBANK','LT',
+    'M&M','MARUTI','NESTLEIND','NTPC','ONGC',
+    'POWERGRID','RELIANCE','SBILIFE','SBIN','SUNPHARMA',
+    'TCS','TATACONSUM','TATAMOTORS','TATASTEEL','TECHM',
+    'TITAN','ULTRACEMCO','UPL','WIPRO','TRENT',
+  ],
+  'banknifty': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSINDBK'],
+  'sensex': [
+    'RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN',
+    'BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI',
+    'SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL','HCLTECH',
+    'TECHM','NTPC','POWERGRID','AXISBANK','BAJAJ-AUTO',
+    'TATAMOTORS','M&M','ULTRACEMCO',
+  ],
 };
 
 interface HeatmapStock {
@@ -32,20 +50,25 @@ interface HeatmapStock {
 
 function chartToStock(symbol: string, chart: import("@/lib/yahoo").YahooChartResult): HeatmapStock {
   const q = normalizeChartQuote(chart);
+  // Yahoo chart API may return 0 for regularMarketVolume outside market hours;
+  // fall back to the indicator volume array to get a usable weight for treemap sizing.
+  const indicatorVolume = chart.indicators?.quote?.[0]?.volume?.find((v): v is number => v != null && v > 0) ?? 0;
+  const volume = q.volume || indicatorVolume;
+
   return {
     symbol,
     last_price: q.price,
     previous_close: q.previousClose,
     change: q.change,
     percent_change: q.percentChange,
-    volume: q.volume,
+    volume,
     market_cap: 0,
     sector: "",
     company_name: q.shortName || symbol,
   };
 }
 
-const CACHE = new Map<string, { data: unknown; expiry: number }>();
+const LOCAL_CACHE = new Map<string, { data: unknown; expiry: number }>();
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -53,10 +76,13 @@ export async function GET(request: Request) {
   const forceRefresh = searchParams.get("refresh") === "true";
 
   const cacheKey = `heatmap:${view}`;
-  const cached = CACHE.get(cacheKey);
 
-  if (!forceRefresh && cached && cached.expiry > Date.now()) {
-    return NextResponse.json(cached.data);
+  if (!forceRefresh) {
+    // Try Redis first (shared across instances), then local fallback
+    const redisData = await getCachedData<unknown>(cacheKey);
+    if (redisData) return NextResponse.json(redisData);
+    const local = LOCAL_CACHE.get(cacheKey);
+    if (local && local.expiry > Date.now()) return NextResponse.json(local.data);
   }
 
   try {
@@ -85,11 +111,14 @@ export async function GET(request: Request) {
       totalStocks: stocks.length
     };
 
-    CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 30000 });
+    // Write to both Redis (shared) and local (fast fallback)
+    await setCachedData(cacheKey, responseData, 30);
+    LOCAL_CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 30000 });
     return NextResponse.json(responseData);
   } catch (error) {
     console.error("Heatmap error:", error);
-    if (cached) return NextResponse.json(cached.data);
+    const local = LOCAL_CACHE.get(cacheKey);
+    if (local) return NextResponse.json(local.data);
     return NextResponse.json({ error: "Failed to fetch heatmap data" }, { status: 500 });
   }
 }

@@ -121,18 +121,22 @@ export default function StockHeatmap({ data, onStockClick }: Props) {
       let s: Item[] = [];
       
       if (data.view === "sectors" && data.groups) {
-        // Aggregate stocks into sector blocks
+        // Aggregate stocks into sector blocks — weight by traded value
         Object.entries(data.groups).forEach(([sectorName, stocks]: [string, any]) => {
           if (!stocks.length) return;
-          const totalVal = stocks.reduce((sum: number, x: any) => sum + Math.max(1, x.market_cap || x.volume || 1e9), 0);
+          const totalVal = stocks.reduce((sum: number, x: any) => {
+            const tv = x.volume > 0 ? x.last_price * x.volume : (x.last_price || 1) * 1e6;
+            return sum + Math.max(1, tv);
+          }, 0);
           const avgPct = stocks.reduce((sum: number, x: any) => sum + (x.percent_change || 0), 0) / stocks.length;
           s.push({ s: sectorName, v: Math.sqrt(totalVal), p: 0, pr: avgPct });
         });
       } else if (data.stocks) {
-        // Map individual company stocks
+        // Map individual company stocks — weight by traded value (price * volume) for realistic sizing;
+        // when volume is unavailable, use price as a rough proxy so tiles aren't all identical.
         s = data.stocks.map((x: any) => {
-          const rawValue = x.market_cap || x.volume || 1e9;
-          return { s: x.symbol, v: Math.sqrt(Math.max(1, rawValue)), p: x.last_price || 0, pr: x.percent_change || 0 };
+          const tradedValue = x.volume > 0 ? x.last_price * x.volume : (x.last_price || 1) * 1e6;
+          return { s: x.symbol, v: Math.sqrt(Math.max(1, tradedValue)), p: x.last_price || 0, pr: x.percent_change || 0 };
         });
       }
       

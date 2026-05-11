@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
+import { getCachedData, setCachedData } from "@/lib/redis";
 
 const MRCHARTIST = "https://fii-diidata.mrchartist.com";
 
@@ -23,6 +24,12 @@ async function fetchMrchartist(path: string): Promise<Record<string, unknown> | 
 }
 
 export async function GET() {
+  const cacheKey = "sentiment:dashboard";
+
+  // Try Redis first (shared across all instances)
+  const cached = await getCachedData<unknown>(cacheKey);
+  if (cached) return NextResponse.json(cached);
+
   try {
     // Fetch advance/decline from Yahoo + sentiment from mrchartist in parallel
     const [chartMap, regimeData, flowData, fiiData] = await Promise.all([
@@ -50,14 +57,15 @@ export async function GET() {
     const events = (flowData?.last_alerted_events as string[]) || [];
 
     let label = "Neutral";
-    if (sentimentScore > 60) label = "Bullish";
-    else if (sentimentScore < 40) label = "Bearish";
-    else if (sentimentScore > 55) label = "Mildly Bullish";
-    else if (sentimentScore < 45) label = "Mildly Bearish";
+    if (sentimentScore >= 75) label = "Extreme Greed";
+    else if (sentimentScore > 60) label = "Greed";
+    else if (sentimentScore <= 25) label = "Extreme Fear";
+    else if (sentimentScore < 40) label = "Fear";
 
-    return NextResponse.json({
+    const responseData = {
       score: sentimentScore,
       label,
+      topTickers: [],
       gains,
       losses,
       advanceRatio: (gains + losses > 0 ? (gains / (gains + losses) * 100).toFixed(1) : "50.0"),
@@ -67,10 +75,15 @@ export async function GET() {
       fiiCumulative10d: fiiCumulative,
       diiCumulative10d: diiCumulative,
       flowEvents: events,
+      timestamp: Date.now(),
       source: "mrchartist",
-    });
+    };
+
+    // Cache in Redis for 60s so all instances return the same data
+    await setCachedData(cacheKey, responseData, 60);
+    return NextResponse.json(responseData);
   } catch (e) {
     console.error("Sentiment error:", e);
-    return NextResponse.json({ score: 50, label: "Neutral", gains: 0, losses: 0, source: "error", error: true });
+    return NextResponse.json({ score: 50, label: "Neutral", topTickers: [], gains: 0, losses: 0, timestamp: Date.now(), source: "error", error: true });
   }
 }
