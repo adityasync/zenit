@@ -55,9 +55,19 @@ export async function GET() {
     else if (sentimentScore <= 25) label = "Extreme Fear";
     else if (sentimentScore < 40) label = "Fear";
 
+    // Build live description from actual data
+    const parts: string[] = [];
+    if (regime && regime !== "UNKNOWN") parts.push(regime);
+    if (recommendation) parts.push(recommendation);
+    if (fiiCumulative !== 0) parts.push(`FII 10d: ${fiiCumulative > 0 ? '+' : ''}${fiiCumulative.toFixed(0)} Cr`);
+    if (diiCumulative !== 0) parts.push(`DII 10d: ${diiCumulative > 0 ? '+' : ''}${diiCumulative.toFixed(0)} Cr`);
+    if (pcr > 0) parts.push(`PCR ${pcr.toFixed(2)}`);
+    const description = parts.length > 0 ? parts.join(' · ') : label;
+
     const responseData = {
       score: sentimentScore,
       label,
+      description,
       topTickers: [],
       gains,
       losses,

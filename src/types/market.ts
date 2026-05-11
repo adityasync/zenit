@@ -81,6 +81,7 @@ export interface NewsItem {
 export interface SentimentData {
   score: number;
   label: "Extreme Fear" | "Fear" | "Neutral" | "Greed" | "Extreme Greed";
+  description?: string;
   topTickers: { symbol: string; mentions: number; bullishRatio?: number }[];
   timestamp: number;
 }

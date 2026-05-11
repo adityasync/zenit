@@ -938,14 +938,27 @@ function AppContent({ tickerRef }: { tickerRef: React.MutableRefObject<((data: S
                     <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest italic flex items-center gap-1">
                       <Flame size={10} className="text-amber-500" /> Sentiment
                     </span>
-                    <Mono className="text-zinc-500 font-bold">
+                    <Mono className={`font-bold ${
+                      (sentiment?.score ?? 50) >= 60 ? 'text-emerald-400' :
+                      (sentiment?.score ?? 50) <= 40 ? 'text-rose-400' :
+                      'text-amber-400'
+                    }`}>
                       {sentiment ? `${sentiment.label} (${sentiment.score})` : 'NEUTRAL (50)'}
                     </Mono>
                  </div>
                  <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden border border-white/5">
-                    <div className="h-full bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" style={{ width: `${sentiment?.score || 50}%` }} />
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        (sentiment?.score ?? 50) >= 60 ? 'bg-emerald-500' :
+                        (sentiment?.score ?? 50) <= 40 ? 'bg-rose-500' :
+                        'bg-amber-500'
+                      }`}
+                      style={{ width: `${sentiment?.score || 50}%` }}
+                    />
                  </div>
-                 <div className="text-[8px] text-zinc-600 italic tracking-tighter">Market sentiment reflects aggressive buying.</div>
+                 <div className="text-[8px] text-zinc-600 italic tracking-tighter">
+                   {sentiment?.description || 'Loading market data...'}
+                 </div>
               </div>
 
               {/* FII / DII Flow Widget */}
@@ -1173,13 +1186,23 @@ function AppContent({ tickerRef }: { tickerRef: React.MutableRefObject<((data: S
                       </div>
                       <div className="p-2 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
                         <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Activity size={10} /> Sentiment</span>
-                        <Mono className="text-lg text-emerald-400">{Number(macroData.vix) > 16 ? 'RISK OFF' : sentiment?.label || 'NEUTRAL'}</Mono>
-                        <div className="text-[9px] text-zinc-500">{Number(macroData.vix) > 16 ? 'Gamma scalp' : 'Normal'}</div>
+                        <Mono className={`text-lg ${
+                          Number(macroData.vix) > 16 ? 'text-rose-400' :
+                          (sentiment?.score ?? 50) >= 60 ? 'text-emerald-400' :
+                          (sentiment?.score ?? 50) <= 40 ? 'text-rose-400' :
+                          'text-amber-400'
+                        }`}>{Number(macroData.vix) > 16 ? 'RISK OFF' : sentiment?.label || 'NEUTRAL'}</Mono>
+                        <div className="text-[9px] text-zinc-500">{Number(macroData.vix) > 16 ? 'Gamma scalp' : sentiment?.description || '...'}</div>
                       </div>
                       <div className="p-2 bg-zinc-900/60 border border-zinc-700/50 rounded-xl bg-zinc-800/30">
                         <span className="text-[8px] font-black text-emerald-400 uppercase block mb-1">Regime</span>
-                        <Mono className="text-lg text-emerald-400">{macroData.vix > 16 ? 'RISK OFF' : sentiment?.label || 'NEUTRAL'}</Mono>
-                        <div className="text-[9px] text-zinc-500">{macroData.vix > 16 ? 'Gamma scalp' : 'Normal'}</div>
+                        <Mono className={`text-lg ${
+                          macroData.vix > 16 ? 'text-rose-400' :
+                          (sentiment?.score ?? 50) >= 60 ? 'text-emerald-400' :
+                          (sentiment?.score ?? 50) <= 40 ? 'text-rose-400' :
+                          'text-amber-400'
+                        }`}>{macroData.vix > 16 ? 'RISK OFF' : sentiment?.label || 'NEUTRAL'}</Mono>
+                        <div className="text-[9px] text-zinc-500">{macroData.vix > 16 ? 'Gamma scalp' : sentiment?.description || '...'}</div>
                       </div>
                       <div className="p-2 bg-zinc-900/60 border border-white/5 rounded-xl">
                         <span className="text-[8px] font-black text-zinc-500 uppercase block mb-1 flex items-center gap-1"><Cpu size={10} /> PCR</span>
