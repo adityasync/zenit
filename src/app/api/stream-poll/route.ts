@@ -1,49 +1,8 @@
 import { NextResponse } from "next/server";
 import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
+import { fetchIndexStocks } from "@/lib/nse-indices";
 
 export const dynamic = "force-dynamic";
-
-const SYMBOLS = [
-  "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL",
-  "LT", "ITC", "KOTAKBANK", "HINDUNILVR", "MARUTI", "SUNPHARMA", "TITAN",
-  "BAJFINANCE", "TATASTEEL", "WIPRO", "HCLTECH", "TECHM", "AXISBANK",
-  "NTPC", "POWERGRID", "ONGC", "COALINDIA", "TATAMOTORS", "DRREDDY",
-  "CIPLA", "BPCL", "LUPIN", "APOLLOHOSP", "JSWSTEEL", "HINDALCO",
-  "VEDL", "DLF", "NESTLEIND", "INDUSINDBK", "GODREJPRO", "OBEROIRLTY",
-  "ADANIENT", "ADANIPORTS", "ASIANPAINT", "BAJAJ-AUTO", "BAJAJFINSV",
-  "BRITANNIA", "DIVISLAB", "EICHERMOT", "GRASIM", "HDFCLIFE",
-  "HEROMOTOCO", "M&M", "SBILIFE", "TATACONSUM", "ULTRACEMCO", "UPL", "TRENT",
-];
-
-const INDEX_CONSTITUENTS: Record<string, { symbols: string[]; baseValue: number }> = {
-  "NIFTY 50": {
-    symbols: [
-      "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
-      "BAJAJ-AUTO","BAJFINANCE","BAJAJFINSV","BHARTIARTL","BPCL",
-      "BRITANNIA","CIPLA","COALINDIA","DIVISLAB","DRREDDY",
-      "EICHERMOT","GRASIM","HCLTECH","HDFCBANK","HDFCLIFE",
-      "HEROMOTOCO","HINDALCO","HINDUNILVR","ICICIBANK","INDUSINDBK",
-      "INFY","ITC","JSWSTEEL","KOTAKBANK","LT",
-      "M&M","MARUTI","NESTLEIND","NTPC","ONGC",
-      "POWERGRID","RELIANCE","SBILIFE","SBIN","SUNPHARMA",
-      "TCS","TATACONSUM","TATAMOTORS","TATASTEEL","TECHM",
-      "TITAN","ULTRACEMCO","UPL","WIPRO","TRENT",
-    ],
-    baseValue: 24500,
-  },
-  "NIFTY BANK": {
-    symbols: ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSINDBK"],
-    baseValue: 52000,
-  },
-  "SENSEX": {
-    symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "LT", "ITC"],
-    baseValue: 81000,
-  },
-  "NIFTY IT": {
-    symbols: ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
-    baseValue: 38000,
-  },
-};
 
 const SECTOR_STOCKS: Record<string, { name: string; symbols: string[] }> = {
   BFSI: { name: "NIFTY BANK", symbols: ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK"] },
@@ -68,10 +27,36 @@ interface StockData {
   previous_close: number;
 }
 
-// Lightweight endpoint for client-side polling fallback (uses Yahoo Finance)
+// Lightweight endpoint for client-side polling fallback
 export async function GET() {
   try {
-    const chartMap = await fetchChartBatch(SYMBOLS, { batchSize: 10, batchDelayMs: 100, timeoutMs: 3000 });
+    // Fetch dynamic constituent lists from NSE (cached 1hr)
+    const [nifty50, bankNifty] = await Promise.all([
+      fetchIndexStocks("nifty50"),
+      fetchIndexStocks("banknifty"),
+    ]);
+
+    const indexConstituents: Record<string, { symbols: string[]; baseValue: number }> = {
+      "SENSEX": {
+        symbols: ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BHARTIARTL","LT","ITC","KOTAKBANK","HINDUNILVR","MARUTI","SUNPHARMA","TITAN","BAJFINANCE","TATASTEEL","HCLTECH","TECHM","NTPC","POWERGRID","AXISBANK","BAJAJ-AUTO","TATAMOTORS","M&M","ULTRACEMCO"],
+        baseValue: 81000,
+      },
+      "NIFTY IT": { symbols: ["TCS","INFY","WIPRO","HCLTECH","TECHM"], baseValue: 38000 },
+    };
+    if (nifty50.length) indexConstituents["NIFTY 50"] = { symbols: nifty50.map(s => s.symbol), baseValue: 24500 };
+    if (bankNifty.length) indexConstituents["NIFTY BANK"] = { symbols: bankNifty.map(s => s.symbol), baseValue: 52000 };
+
+    // Collect all unique symbols
+    const symbolSet = new Set<string>();
+    for (const config of Object.values(indexConstituents)) {
+      for (const s of config.symbols) symbolSet.add(s);
+    }
+    for (const config of Object.values(SECTOR_STOCKS)) {
+      for (const s of config.symbols) symbolSet.add(s);
+    }
+    const allSymbols = Array.from(symbolSet);
+
+    const chartMap = await fetchChartBatch(allSymbols, { batchSize: 10, batchDelayMs: 100, timeoutMs: 3000 });
     const stockMap = new Map<string, StockData>();
 
     chartMap.forEach((chart, symbol) => {
@@ -91,7 +76,7 @@ export async function GET() {
     });
 
     // Derive indices
-    const indices = Object.entries(INDEX_CONSTITUENTS).map(([name, config]) => {
+    const indices = Object.entries(indexConstituents).map(([name, config]) => {
       const changes: number[] = [];
       for (const sym of config.symbols) {
         const stock = stockMap.get(sym);

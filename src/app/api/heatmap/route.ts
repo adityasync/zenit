@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { fetchIndexStocks, type IndexStock } from "@/lib/nse-indices";
 import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
 import { getCachedData, setCachedData } from "@/lib/redis";
 
+// Sector groupings — used only for the "sectors" view
 const SECTOR_MAPPINGS: Record<string, string[]> = {
   'IT': ['TCS','INFY','WIPRO','HCLTECH','TECHM'],
   'BFSI': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSINDBK'],
@@ -11,29 +13,6 @@ const SECTOR_MAPPINGS: Record<string, string[]> = {
   'METAL': ['TATASTEEL','HINDALCO','JSWSTEEL','VEDL','COALINDIA'],
   'ENERGY': ['RELIANCE','ONGC','BPCL','NTPC','POWERGRID'],
   'REALTY': ['DLF','GODREJPRO','OBEROIRLTY']
-};
-
-const INDEX_STOCKS: Record<string, string[]> = {
-  'nifty50': [
-    'ADANIENT','ADANIPORTS','APOLLOHOSP','ASIANPAINT','AXISBANK',
-    'BAJAJ-AUTO','BAJFINANCE','BAJAJFINSV','BHARTIARTL','BPCL',
-    'BRITANNIA','CIPLA','COALINDIA','DIVISLAB','DRREDDY',
-    'EICHERMOT','GRASIM','HCLTECH','HDFCBANK','HDFCLIFE',
-    'HEROMOTOCO','HINDALCO','HINDUNILVR','ICICIBANK','INDUSINDBK',
-    'INFY','ITC','JSWSTEEL','KOTAKBANK','LT',
-    'M&M','MARUTI','NESTLEIND','NTPC','ONGC',
-    'POWERGRID','RELIANCE','SBILIFE','SBIN','SUNPHARMA',
-    'TCS','TATACONSUM','TATAMOTORS','TATASTEEL','TECHM',
-    'TITAN','ULTRACEMCO','UPL','WIPRO','TRENT',
-  ],
-  'banknifty': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSINDBK'],
-  'sensex': [
-    'RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN',
-    'BHARTIARTL','LT','ITC','KOTAKBANK','HINDUNILVR','MARUTI',
-    'SUNPHARMA','TITAN','BAJFINANCE','TATASTEEL','HCLTECH',
-    'TECHM','NTPC','POWERGRID','AXISBANK','BAJAJ-AUTO',
-    'TATAMOTORS','M&M','ULTRACEMCO',
-  ],
 };
 
 interface HeatmapStock {
@@ -48,23 +27,17 @@ interface HeatmapStock {
   company_name: string;
 }
 
-function chartToStock(symbol: string, chart: import("@/lib/yahoo").YahooChartResult): HeatmapStock {
-  const q = normalizeChartQuote(chart);
-  // Yahoo chart API may return 0 for regularMarketVolume outside market hours;
-  // fall back to the indicator volume array to get a usable weight for treemap sizing.
-  const indicatorVolume = chart.indicators?.quote?.[0]?.volume?.find((v): v is number => v != null && v > 0) ?? 0;
-  const volume = q.volume || indicatorVolume;
-
+function toHeatmapStock(s: IndexStock, sector?: string): HeatmapStock {
   return {
-    symbol,
-    last_price: q.price,
-    previous_close: q.previousClose,
-    change: q.change,
-    percent_change: q.percentChange,
-    volume,
-    market_cap: 0,
-    sector: "",
-    company_name: q.shortName || symbol,
+    symbol: s.symbol,
+    last_price: s.last_price,
+    previous_close: s.previous_close,
+    change: s.change,
+    percent_change: s.percent_change,
+    volume: s.volume,
+    market_cap: s.market_cap,
+    sector: sector || "",
+    company_name: s.company_name,
   };
 }
 
@@ -78,7 +51,6 @@ export async function GET(request: Request) {
   const cacheKey = `heatmap:${view}`;
 
   if (!forceRefresh) {
-    // Try Redis first (shared across instances), then local fallback
     const redisData = await getCachedData<unknown>(cacheKey);
     if (redisData) return NextResponse.json(redisData);
     const local = LOCAL_CACHE.get(cacheKey);
@@ -86,20 +58,37 @@ export async function GET(request: Request) {
   }
 
   try {
-    const allSymbols = view === "sectors"
-      ? Object.values(SECTOR_MAPPINGS).flat()
-      : INDEX_STOCKS[view] || INDEX_STOCKS['nifty50'];
-
-    const chartMap = await fetchChartBatch(allSymbols, { batchSize: 10, batchDelayMs: 100, timeoutMs: 3000 });
-    const stocks: HeatmapStock[] = [];
-    chartMap.forEach((chart, sym) => stocks.push(chartToStock(sym, chart)));
-
+    let stocks: HeatmapStock[];
     let groups: Record<string, HeatmapStock[]> = {};
+
     if (view === "sectors") {
+      // Sectors view: fetch all sector stocks from Yahoo (NSE doesn't have a sector-stocks endpoint)
+      const allSymbols = Object.values(SECTOR_MAPPINGS).flat();
+      const chartMap = await fetchChartBatch(allSymbols, { batchSize: 10, batchDelayMs: 100, timeoutMs: 3000 });
+      const allStocks: HeatmapStock[] = [];
+      chartMap.forEach((chart, sym) => {
+        const q = normalizeChartQuote(chart);
+        const indicatorVolume = chart.indicators?.quote?.[0]?.volume?.find((v): v is number => v != null && v > 0) ?? 0;
+        allStocks.push({
+          symbol: sym,
+          last_price: q.price,
+          previous_close: q.previousClose,
+          change: q.change,
+          percent_change: q.percentChange,
+          volume: q.volume || indicatorVolume,
+          market_cap: 0,
+          sector: "",
+          company_name: q.shortName || sym,
+        });
+      });
+      stocks = allStocks;
       for (const [sector, symbols] of Object.entries(SECTOR_MAPPINGS)) {
         groups[sector] = stocks.filter(s => symbols.includes(s.symbol));
       }
     } else {
+      // Index views (nifty50, banknifty, sensex): fetch from NSE dynamically
+      const indexStocks = await fetchIndexStocks(view);
+      stocks = indexStocks.map(s => toHeatmapStock(s));
       groups = { [view]: stocks };
     }
 
@@ -111,7 +100,6 @@ export async function GET(request: Request) {
       totalStocks: stocks.length
     };
 
-    // Write to both Redis (shared) and local (fast fallback)
     await setCachedData(cacheKey, responseData, 30);
     LOCAL_CACHE.set(cacheKey, { data: responseData, expiry: Date.now() + 30000 });
     return NextResponse.json(responseData);

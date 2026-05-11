@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server";
-import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
 import { getCachedData, setCachedData } from "@/lib/redis";
+import { fetchIndexStocks } from "@/lib/nse-indices";
 
 const MRCHARTIST = "https://fii-diidata.mrchartist.com";
-
-const NIFTY50_SYMBOLS = [
-  "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BHARTIARTL",
-  "LT","ITC","KOTAKBANK","HINDUNILVR","MARUTI","SUNPHARMA","TITAN",
-  "BAJFINANCE","TATASTEEL","WIPRO","HCLTECH","TECHM"
-];
 
 async function fetchMrchartist(path: string): Promise<Record<string, unknown> | null> {
   try {
@@ -31,21 +25,20 @@ export async function GET() {
   if (cached) return NextResponse.json(cached);
 
   try {
-    // Fetch advance/decline from Yahoo + sentiment from mrchartist in parallel
-    const [chartMap, regimeData, flowData, fiiData] = await Promise.all([
-      fetchChartBatch(NIFTY50_SYMBOLS, { batchSize: 10, batchDelayMs: 100, timeoutMs: 3000 }),
+    // Fetch advance/decline from NSE + sentiment from mrchartist in parallel
+    const [nifty50Stocks, regimeData, flowData, fiiData] = await Promise.all([
+      fetchIndexStocks("nifty50"),
       fetchMrchartist("/api/agents/regime"),
       fetchMrchartist("/api/agents/flow-strength"),
       fetchMrchartist("/api/data"),
     ]);
 
-    // Advance/decline from Yahoo
+    // Advance/decline from NSE (or Yahoo fallback via fetchIndexStocks)
     let gains = 0, losses = 0;
-    chartMap.forEach((chart) => {
-      const q = normalizeChartQuote(chart);
-      if (q.percentChange > 0.05) gains++;
-      else if (q.percentChange < -0.05) losses++;
-    });
+    for (const stock of nifty50Stocks) {
+      if (stock.percent_change > 0.05) gains++;
+      else if (stock.percent_change < -0.05) losses++;
+    }
 
     // Sentiment from mrchartist
     const sentimentScore = (fiiData?.sentiment_score as number) ?? 50;

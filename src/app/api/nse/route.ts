@@ -167,6 +167,45 @@ export async function GET(request: Request) {
       return NextResponse.json(sectors);
     }
 
+    case "constituents": {
+      const index = searchParams.get("index") || "NIFTY 50";
+      const data = await fetchNSE<{
+        data: Array<{
+          symbol: string;
+          open: number;
+          high: number;
+          low: number;
+          ltP: number | string;
+          previousClose: number;
+          change: number;
+          perChange: number;
+          trdVol: number;
+          mktCap: number;
+          series: string;
+        }>;
+        name: string;
+      }>(`/api/equity-stockIndices?index=${encodeURIComponent(index)}`);
+
+      if (!data?.data) {
+        return NextResponse.json({ error: "Failed to fetch constituents" }, { status: 500 });
+      }
+
+      const stocks = data.data
+        .filter((s) => s.series === "EQ" || s.series === "BE")
+        .map((s) => ({
+          symbol: s.symbol,
+          last_price: typeof s.ltP === "string" ? parseFloat(s.ltP) || 0 : s.ltP || 0,
+          previous_close: s.previousClose || 0,
+          change: s.change || 0,
+          percent_change: s.perChange || 0,
+          volume: s.trdVol || 0,
+          market_cap: (s.mktCap || 0) * 1e7,
+          company_name: s.symbol,
+        }));
+
+      return NextResponse.json({ index: data.name || index, stocks, timestamp: Date.now() });
+    }
+
     default:
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
   }

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getMarketNews } from "@/lib/news";
 import { fetchChartBatch, normalizeChartQuote } from "@/lib/yahoo";
+import { fetchIndexStocks } from "@/lib/nse-indices";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -65,45 +66,6 @@ interface GainerLoser {
   sector?: string;
 }
 
-// Index constituent stocks for deriving index movement
-const INDEX_CONSTITUENTS: Record<string, { symbols: string[]; baseValue: number }> = {
-  "NIFTY 50": {
-    symbols: [
-      "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
-      "BAJAJ-AUTO","BAJFINANCE","BAJAJFINSV","BHARTIARTL","BPCL",
-      "BRITANNIA","CIPLA","COALINDIA","DIVISLAB","DRREDDY",
-      "EICHERMOT","GRASIM","HCLTECH","HDFCBANK","HDFCLIFE",
-      "HEROMOTOCO","HINDALCO","HINDUNILVR","ICICIBANK","INDUSINDBK",
-      "INFY","ITC","JSWSTEEL","KOTAKBANK","LT",
-      "M&M","MARUTI","NESTLEIND","NTPC","ONGC",
-      "POWERGRID","RELIANCE","SBILIFE","SBIN","SUNPHARMA",
-      "TCS","TATACONSUM","TATAMOTORS","TATASTEEL","TECHM",
-      "TITAN","ULTRACEMCO","UPL","WIPRO","TRENT",
-    ],
-    baseValue: 24500,
-  },
-  "NIFTY BANK": {
-    symbols: ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSINDBK"],
-    baseValue: 52000,
-  },
-  "SENSEX": {
-    symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "LT", "ITC"],
-    baseValue: 81000,
-  },
-  "NIFTY IT": {
-    symbols: ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
-    baseValue: 38000,
-  },
-  "NIFTY AUTO": {
-    symbols: ["MARUTI", "TATAMOTORS", "BAJFINANCE"],
-    baseValue: 26000,
-  },
-  "NIFTY PHARMA": {
-    symbols: ["SUNPHARMA", "DRREDDY", "CIPLA", "LUPIN", "APOLLOHOSP"],
-    baseValue: 22000,
-  },
-};
-
 // Sector mappings for sector strength
 const SECTOR_STOCKS: Record<string, { name: string; symbols: string[] }> = {
   BFSI: { name: "NIFTY BANK", symbols: ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK"] },
@@ -116,19 +78,57 @@ const SECTOR_STOCKS: Record<string, { name: string; symbols: string[] }> = {
   REALTY: { name: "NIFTY REALTY", symbols: ["DLF", "GODREJPRO", "OBEROIRLTY"] },
 };
 
-// All unique symbols needed - simplified list without problematic symbols
-function getAllSymbols(): string[] {
-  return [
-    "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BHARTIARTL",
-    "LT","ITC","KOTAKBANK","HINDUNILVR","MARUTI","SUNPHARMA","TITAN",
-    "BAJFINANCE","TATASTEEL","WIPRO","HCLTECH","TECHM","AXISBANK",
-    "NTPC","POWERGRID","ONGC","COALINDIA","TATAMOTORS","DRREDDY",
-    "CIPLA","BPCL","LUPIN","JSWSTEEL","HINDALCO","VEDL","DLF","NESTLEIND",
-    "INDUSINDBK","GODREJPRO","OBEROIRLTY","ULTRACEMCO",
-    "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","BAJAJ-AUTO",
-    "BAJAJFINSV","BRITANNIA","DIVISLAB","EICHERMOT","GRASIM",
-    "HDFCLIFE","HEROMOTOCO","M&M","SBILIFE","TATACONSUM","UPL","TRENT",
-  ];
+// Dynamic constituent lists — fetched from NSE, cached for 1 hour
+const CONSTITUENT_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+let cachedConstituents: Record<string, { symbols: string[]; baseValue: number }> | null = null;
+let constituentsExpiry = 0;
+
+async function getIndexConstituents(): Promise<Record<string, { symbols: string[]; baseValue: number }>> {
+  if (cachedConstituents && Date.now() < constituentsExpiry) return cachedConstituents;
+
+  const defaults: Record<string, { symbols: string[]; baseValue: number }> = {
+    "SENSEX": {
+      symbols: ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BHARTIARTL","LT","ITC","KOTAKBANK","HINDUNILVR","MARUTI","SUNPHARMA","TITAN","BAJFINANCE","TATASTEEL","HCLTECH","TECHM","NTPC","POWERGRID","AXISBANK","BAJAJ-AUTO","TATAMOTORS","M&M","ULTRACEMCO"],
+      baseValue: 81000,
+    },
+    "NIFTY IT": { symbols: ["TCS","INFY","WIPRO","HCLTECH","TECHM"], baseValue: 38000 },
+    "NIFTY AUTO": { symbols: ["MARUTI","TATAMOTORS","BAJFINANCE"], baseValue: 26000 },
+    "NIFTY PHARMA": { symbols: ["SUNPHARMA","DRREDDY","CIPLA","LUPIN","APOLLOHOSP"], baseValue: 22000 },
+  };
+
+  try {
+    const [nifty50, bankNifty] = await Promise.all([
+      fetchIndexStocks("nifty50"),
+      fetchIndexStocks("banknifty"),
+    ]);
+
+    const result: Record<string, { symbols: string[]; baseValue: number }> = { ...defaults };
+
+    if (nifty50.length) {
+      result["NIFTY 50"] = { symbols: nifty50.map(s => s.symbol), baseValue: 24500 };
+    }
+    if (bankNifty.length) {
+      result["NIFTY BANK"] = { symbols: bankNifty.map(s => s.symbol), baseValue: 52000 };
+    }
+
+    cachedConstituents = result;
+    constituentsExpiry = Date.now() + CONSTITUENT_CACHE_TTL;
+    return result;
+  } catch {
+    return cachedConstituents || defaults;
+  }
+}
+
+// Collect all unique symbols from index constituents + sector stocks
+function getAllSymbols(constituents: Record<string, { symbols: string[] }>): string[] {
+  const set = new Set<string>();
+  for (const config of Object.values(constituents)) {
+    for (const s of config.symbols) set.add(s);
+  }
+  for (const config of Object.values(SECTOR_STOCKS)) {
+    for (const s of config.symbols) set.add(s);
+  }
+  return Array.from(set);
 }
 
 interface StockData {
@@ -239,14 +239,15 @@ export async function GET(request: NextRequest) {
 
       const generateAll = async () => {
         try {
-          // Fetch all needed stocks in one batch
-          const allSymbols = getAllSymbols();
+          // Fetch constituent lists from NSE (cached 1hr), then prices from Yahoo
+          const indexConstituents = await getIndexConstituents();
+          const allSymbols = getAllSymbols(indexConstituents);
           const stockData = await fetchBatchStocks(allSymbols);
 
           // ── Indices ──
           let indices: IndexData[] = [];
           // Always derive indices, even if market is closed
-          indices = Object.entries(INDEX_CONSTITUENTS).map(([name, config]) => {
+          indices = Object.entries(indexConstituents).map(([name, config]) => {
             const derived = deriveIndex(config.symbols, config.baseValue, stockData);
             return {
               symbol: name.replace(/\s/g, ""),
