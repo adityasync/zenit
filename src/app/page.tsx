@@ -45,18 +45,34 @@ import {
 } from 'lucide-react';
 import { StartupLoading } from "@/components/startup-loading";
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSSE } from "@/hooks/useSSE";
+import { MarketProvider, useMarket } from "@/contexts/MarketContext";
+import { OverlayProvider, useOverlay } from "@/contexts/OverlayContext";
+import { usePaperTrading } from "@/hooks/usePaperTrading";
 import { MobileNav, MobileTab, MobileView } from "@/components/mobile-nav";
-import type { IndexData, StockQuote, MarketBreadth, GainerLoser, SectorData, SentimentData } from "@/types/market";
+import type { StockQuote } from "@/types/market";
 import type { LucideIcon } from "lucide-react";
 import { getLotSize, isFOStock, toLots, fromLots } from "@/lib/fo-lots";
-import type { PaperTradeOrder } from "@/types/market";
 import { OptionsChain } from "@/components/options-chain";
 import { SentimentGauge } from "@/components/sentiment-gauge";
 import { OIWall } from "@/components/oi-wall";
 import { EarningsContent } from "@/components/EarningsWidget";
 import { CorporateActionsContent } from "@/components/CorporateActionsWidget";
 import { EconomicCalendarContent } from "@/components/EconomicCalendarWidget";
+import { DockPanel } from "@/components/dock-panel";
+import { Mono } from "@/components/ui/mono";
+import { WidgetHeader } from "@/components/ui/widget-header";
+import { VIXCard } from "@/components/widgets/vix-card";
+import { FlowCard } from "@/components/widgets/flow-card";
+import { InstitutionalCard } from "@/components/widgets/institutional-card";
+import { SectorFlowsCard } from "@/components/widgets/sector-flows-card";
+import { InstitutionalHistoryCard } from "@/components/widgets/institutional-history-card";
+import { FXRatesCard } from "@/components/widgets/fx-rates-card";
+import { RBIRatesCard } from "@/components/widgets/rbi-rates-card";
+import { MacroIndicatorsCard } from "@/components/widgets/macro-indicators-card";
+import { GridProvider, useGrid } from "@/contexts/GridContext";
+import { PinnedStrip } from "@/components/pinned-strip";
+import { ScrollSection } from "@/components/mobile/scroll-section";
+import { QuickJumpBar } from "@/components/mobile/quick-jump-bar";
 
 const WATCHLIST_KEY = "zenit:watchlist";
 
@@ -75,309 +91,6 @@ const formatPrice = (val: number) => {
   return val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const Mono = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
-  <span className={`font-mono tracking-tighter ${className}`} style={{ fontVariantNumeric: 'tabular-nums' } as React.CSSProperties}>{children}</span>
-);
-
-const WidgetHeader = ({ title, icon: Icon, extra, onExpand }: { title: string; icon?: LucideIcon; extra?: React.ReactNode; onExpand?: () => void }) => (
-  <div className="flex items-center justify-between mb-2">
-    <div className="flex items-center gap-2">
-      {Icon && <Icon size={12} className="text-zinc-500" />}
-      <span className="text-[10px] font-black uppercase tracking-[0.15em] text-zinc-500">{title}</span>
-    </div>
-    <div className="flex items-center gap-2">
-      {extra}
-      {onExpand && (
-        <button onClick={onExpand} className="text-zinc-700 hover:text-amber-500 transition-colors p-0.5 rounded hover:bg-white/5" title="Expand">
-          <Maximize2 size={10} />
-        </button>
-      )}
-    </div>
-  </div>
-);
-
-const CandlestickChart = ({ height = 180, data = [] }: { height?: number; data?: any[] }) => {
-  if (!data || data.length === 0) {
-    return (
-      <div className="w-full bg-zinc-950/40 rounded border border-white/5 relative overflow-hidden flex items-center justify-center" style={{ height }}>
-        <div className="flex flex-col items-center gap-2">
-          <Activity className="w-5 h-5 text-zinc-700 animate-pulse" />
-          <span className="text-[10px] text-zinc-600 font-mono">No historical data available</span>
-        </div>
-      </div>
-    );
-  }
-
-  const max = Math.max(...data.map(c => c.high));
-  const min = Math.min(...data.map(c => c.low));
-  const range = max - min;
-  const getY = (v: number) => height - ((v - min) / (range || 1)) * height;
-  const candleWidth = 100 / (data.length || 1);
-
-  return (
-    <div className="w-full bg-zinc-950/40 rounded-xl border border-white/5 relative overflow-hidden group" style={{ height }}>
-      <svg width="100%" height={height} className="overflow-visible">
-        {/* Horizontal Grid Lines */}
-        {[0, 0.25, 0.5, 0.75, 1].map((p) => {
-          const y = height * p;
-          const price = max - (p * range);
-          return (
-            <g key={p}>
-              <line x1="0" y1={y} x2="100%" y2={y} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
-              <text x="4" y={y - 4} className="text-[8px] fill-zinc-700 font-mono">{price.toLocaleString()}</text>
-            </g>
-          );
-        })}
-
-        {/* Candles */}
-        {data.map((c, i) => {
-          const isGreen = c.close >= c.open;
-          const color = isGreen ? "#10b981" : "#ef4444";
-          const bodyTop = getY(Math.max(c.open, c.close));
-          const bodyBottom = getY(Math.min(c.open, c.close));
-          const bodyHeight = Math.max(1, bodyBottom - bodyTop);
-          const centerX = (i + 0.5) * candleWidth;
-          const midX = `${centerX}%`;
-
-          return (
-            <g key={i}>
-              <line 
-                x1={midX} y1={getY(c.high)} 
-                x2={midX} y2={getY(c.low)} 
-                stroke={color} strokeWidth="1" opacity="0.6" 
-              />
-              <rect
-                x={`${i * candleWidth + 0.1}%`}
-                y={bodyTop}
-                width={`${candleWidth - 0.2}%`}
-                height={bodyHeight}
-                fill={color}
-                opacity={isGreen ? "0.3" : "0.5"}
-                className="transition-all hover:opacity-100"
-              />
-            </g>
-          );
-        })}
-      </svg>
-      <div className="absolute top-2 right-2 text-[8px] font-mono text-zinc-600 uppercase tracking-widest">90D Historical Stream</div>
-    </div>
-  );
-};
-
-// ─── View-specific card components ─────────────────────────────────
-
-const VIXCard = () => {
-  const [vix, setVix] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/vix').then(r => r.json()).then(setVix).catch(() => {});
-  }, []);
-  if (!vix || vix.error) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">VIX data unavailable</div>;
-  return (
-    <div className="flex-1 flex flex-col justify-center items-center gap-2">
-      <Mono className="text-3xl font-black text-amber-500">{vix.vix}</Mono>
-      <span className={`text-xs font-bold ${parseFloat(vix.change) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-        {parseFloat(vix.change) >= 0 ? '+' : ''}{vix.change} ({vix.percentChange}%)
-      </span>
-      <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${vix.regime === 'HIGH' ? 'bg-rose-500/20 text-rose-500' : vix.regime === 'LOW' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-zinc-500/20 text-zinc-400'}`}>
-        {vix.regime}
-      </span>
-      <div className="text-[9px] text-zinc-600 mt-1">Implied Move: {vix.impliedMove}%</div>
-    </div>
-  );
-};
-
-const FlowCard = () => {
-  const [flow, setFlow] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/flow').then(r => r.json()).then(setFlow).catch(() => {});
-  }, []);
-  if (!flow || flow.error) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">Flow data unavailable</div>;
-  return (
-    <div className="flex-1 flex flex-col gap-3 justify-center p-2">
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-center"><div className="text-[9px] text-zinc-500">PCR</div><Mono className="text-lg font-black text-white">{flow.pcr}</Mono></div>
-        <div className="text-center"><div className="text-[9px] text-zinc-500">Delta</div><Mono className={`text-lg font-black ${flow.delta >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{flow.delta}%</Mono></div>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-center"><div className="text-[9px] text-zinc-500">Call OI</div><Mono className="text-xs text-white">{formatNumber(flow.callOI)}</Mono></div>
-        <div className="text-center"><div className="text-[9px] text-zinc-500">Put OI</div><Mono className="text-xs text-white">{formatNumber(flow.putOI)}</Mono></div>
-      </div>
-      <div className="text-center"><div className="text-[9px] text-zinc-500">IV</div><Mono className="text-xs text-amber-500">{flow.impliedVol}%</Mono></div>
-    </div>
-  );
-};
-
-const InstitutionalCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/institutional?sectors=false').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  if (!data) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">Loading...</div>;
-  const fii = data.fii || {};
-  const dii = data.dii || {};
-  return (
-    <div className="flex-1 flex flex-col gap-3 overflow-y-auto">
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-zinc-950/50 rounded-lg p-3 border border-white/5">
-          <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1">FII Net</div>
-          <Mono className={`text-xl font-black ${(fii.net || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-            {(fii.net || 0) >= 0 ? '+' : ''}{formatNumber(fii.net || 0)} Cr
-          </Mono>
-          <div className="flex justify-between mt-2 text-[9px]">
-            <span className="text-emerald-500">Buy: {formatNumber(fii.buyValue || 0)}</span>
-            <span className="text-rose-500">Sell: {formatNumber(fii.sellValue || 0)}</span>
-          </div>
-        </div>
-        <div className="bg-zinc-950/50 rounded-lg p-3 border border-white/5">
-          <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1">DII Net</div>
-          <Mono className={`text-xl font-black ${(dii.net || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-            {(dii.net || 0) >= 0 ? '+' : ''}{formatNumber(dii.net || 0)} Cr
-          </Mono>
-          <div className="flex justify-between mt-2 text-[9px]">
-            <span className="text-emerald-500">Buy: {formatNumber(dii.buyValue || 0)}</span>
-            <span className="text-rose-500">Sell: {formatNumber(dii.sellValue || 0)}</span>
-          </div>
-        </div>
-      </div>
-      <div className="text-[8px] text-zinc-600 text-center">{data.date} · {data.status === 'live' ? 'Live' : data.status}</div>
-    </div>
-  );
-};
-
-const SectorFlowsCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/institutional').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const flows = data?.sectorFlows || [];
-  if (flows.length === 0) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">Loading...</div>;
-  return (
-    <div className="flex-1 overflow-y-auto space-y-1.5">
-      {flows.map((f: any) => (
-        <div key={f.sector} className="flex items-center justify-between p-2 bg-zinc-950/50 rounded-lg border border-white/5">
-          <div>
-            <div className="text-[11px] font-bold text-white">{f.sector}</div>
-            <div className="text-[9px] text-zinc-500">{f.name}</div>
-          </div>
-          <div className="text-right">
-            <div className={`text-[11px] font-mono font-bold ${f.trend === 'inflow' ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {f.trend === 'inflow' ? '+' : ''}{formatNumber(f.netFlow)} Cr
-            </div>
-            <div className={`text-[9px] ${f.percentChange >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-              {f.percentChange >= 0 ? '+' : ''}{f.percentChange}%
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-const InstitutionalHistoryCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/institutional?history=30&sectors=false').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const history = data?.history || [];
-  if (history.length === 0) return <div className="flex-1 flex items-center justify-center text-[10px] text-zinc-600">No historical data yet</div>;
-  const maxAbs = Math.max(...history.map((d: any) => Math.max(Math.abs(d.fiiNet || 0), Math.abs(d.diiNet || 0))), 1);
-  return (
-    <div className="flex-1 flex items-end gap-0.5 overflow-x-auto no-scrollbar pb-6 pt-2">
-      {history.map((d: any, i: number) => (
-        <div key={i} className="flex flex-col items-center gap-0.5 min-w-[20px] flex-1">
-          <div className="flex gap-px items-end h-20">
-            <div className="w-1.5 bg-emerald-500/60 rounded-t" style={{ height: `${Math.abs(d.fiiNet || 0) / maxAbs * 100}%`, minHeight: 2 }} />
-            <div className="w-1.5 bg-blue-500/60 rounded-t" style={{ height: `${Math.abs(d.diiNet || 0) / maxAbs * 100}%`, minHeight: 2 }} />
-          </div>
-          <span className="text-[7px] text-zinc-600 rotate-45 origin-left">{d.date?.slice(5)}</span>
-        </div>
-      ))}
-      <div className="absolute bottom-0 right-0 flex gap-2 text-[8px]">
-        <span className="text-emerald-500">FII</span>
-        <span className="text-blue-500">DII</span>
-      </div>
-    </div>
-  );
-};
-
-const FXRatesCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/macro?type=fx').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const fx = data?.fx || {};
-  const pairs = [
-    { key: 'usdInr', label: 'USD/INR', flag: '🇺🇸' },
-    { key: 'eurInr', label: 'EUR/INR', flag: '🇪🇺' },
-    { key: 'gbpInr', label: 'GBP/INR', flag: '🇬🇧' },
-    { key: 'jpyInr', label: 'JPY/INR', flag: '🇯🇵' },
-  ];
-  return (
-    <div className="flex-1 flex flex-col gap-2 justify-center">
-      {pairs.map(p => (
-        <div key={p.key} className="flex items-center justify-between p-2 bg-zinc-950/50 rounded-lg border border-white/5">
-          <span className="text-[10px] text-zinc-400">{p.flag} {p.label}</span>
-          <Mono className="text-xs font-bold text-white">{fx[p.key] ? fx[p.key].toFixed(2) : '—'}</Mono>
-        </div>
-      ))}
-      <div className="text-[8px] text-zinc-600 text-center mt-1">Source: {fx.source || 'N/A'}</div>
-    </div>
-  );
-};
-
-const RBIRatesCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/macro').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const rbi = data?.macro?.rbiRates || {};
-  const rates = [
-    { label: 'Repo', value: rbi.repo },
-    { label: 'Reverse Repo', value: rbi.reverseRepo },
-    { label: 'CRR', value: rbi.crr },
-    { label: 'SLR', value: rbi.slr },
-    { label: 'MSF', value: rbi.msf },
-    { label: 'Bank Rate', value: rbi.bankRate },
-  ];
-  return (
-    <div className="flex-1 flex flex-col gap-1.5 justify-center">
-      {rates.map(r => (
-        <div key={r.label} className="flex items-center justify-between px-2 py-1.5 bg-zinc-950/50 rounded border border-white/5">
-          <span className="text-[9px] text-zinc-500">{r.label}</span>
-          <Mono className="text-[11px] font-bold text-white">{r.value ? `${r.value}%` : '—'}</Mono>
-        </div>
-      ))}
-      {rbi.lastPolicyDate && <div className="text-[8px] text-zinc-600 text-center mt-1">Last: {rbi.lastPolicyDate}</div>}
-    </div>
-  );
-};
-
-const MacroIndicatorsCard = () => {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    fetch('/api/macro').then(r => r.json()).then(setData).catch(() => {});
-  }, []);
-  const macro = data?.macro || {};
-  const indicators = [
-    { label: 'GDP Growth', value: macro.gdp?.growth, year: macro.gdp?.year, unit: '%' },
-    { label: 'GDP Value', value: macro.gdpValue?.valueTrillion, year: macro.gdpValue?.year, unit: 'T USD' },
-    { label: 'CPI Inflation', value: macro.cpi?.inflation, year: macro.cpi?.year, unit: '%' },
-    { label: 'IIP Growth', value: macro.iip?.growth, year: macro.iip?.year, unit: '%' },
-  ];
-  return (
-    <div className="flex-1 flex items-center gap-4 overflow-x-auto no-scrollbar px-2">
-      {indicators.map(ind => (
-        <div key={ind.label} className="flex flex-col items-center gap-1 bg-zinc-950/50 rounded-lg border border-white/5 p-4 min-w-[120px]">
-          <span className="text-[9px] text-zinc-500 uppercase tracking-wider">{ind.label}</span>
-          <Mono className="text-xl font-black text-white">
-            {ind.value !== null && ind.value !== undefined ? `${ind.value}${ind.unit}` : '—'}
-          </Mono>
-          {ind.year && <span className="text-[8px] text-zinc-600">{ind.year}</span>}
-        </div>
-      ))}
-    </div>
-  );
-};
 
 interface WatchlistItem {
   symbol: string;
@@ -413,26 +126,19 @@ async function callCopilotAPI(query: string, context: string = "") {
   }
 }
 
-export default function App() {
-  const [indices, setIndices] = useState<IndexData[]>([]);
-  const [breadth, setBreadth] = useState<MarketBreadth | null>(null);
-  const [gainers, setGainers] = useState<GainerLoser[]>([]);
-  const [losers, setLosers] = useState<GainerLoser[]>([]);
-  const [sectors, setSectors] = useState<SectorData[]>([]);
-  const [sentiment, setSentiment] = useState<SentimentData | null>(null);
-  
+function AppContent({ tickerRef }: { tickerRef: React.MutableRefObject<((data: StockQuote) => void) | null> }) {
+  const { indices, breadth, gainers, losers, sectors, sentiment, setSentiment, screenerSignals, isConnected, isConnecting, lastUpdate, loading } = useMarket();
+  const overlay = useOverlay();
+  const { selectedStockSymbol, selectStock } = useGrid();
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  
-  const [activeOverlay, setActiveOverlay] = useState<string | null>(null); 
+
   const [heatmapData, setHeatmapData] = useState<any>(null);
   const [heatmapView, setHeatmapView] = useState<"sectors" | "nifty50" | "banknifty" | "sensex">("sectors");
   const [selectedStock, setSelectedStock] = useState<WatchlistItem | null>(null);
-  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
-  const [mobileTab, setMobileTab] = useState<MobileTab>("indices");
-  const [activeView, setActiveView] = useState<DesktopView>("overview");
+  const [activeDock, setActiveDock] = useState<DesktopView | null>(null);
   
   const [stockInsight, setStockInsight] = useState({ text: "", loading: false });
   const [copilotQuery, setCopilotQuery] = useState("");
@@ -441,23 +147,20 @@ export default function App() {
   const [optionsChain, setOptionsChain] = useState<any>(null);
   const [newsData, setNewsData] = useState<any[]>([]);
   const [institutionalData, setInstitutionalData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [chartData, setChartData] = useState<any[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartSymbol, setChartSymbol] = useState<string>("");
 
-  const [balance, setBalance] = useState(100000);
-  const [positions, setPositions] = useState<{ symbol: string; quantity: number; avgPrice: number; currentPrice: number; lotSize?: number; }[]>([]);
-  const [pendingOrders, setPendingOrders] = useState<PaperTradeOrder[]>([]);
-  const [orderType, setOrderType] = useState<"market" | "limit" | "stop-loss" | "target">("market");
-  const [limitPrice, setLimitPrice] = useState<string>("");
-  const [stopLossPrice, setStopLossPrice] = useState<string>("");
-  const [useLots, setUseLots] = useState<boolean>(false);
-  const [tradeQty, setTradeQty] = useState<string>("10");
-  const [screenerSignals, setScreenerSignals] = useState<any[]>([]);
-  const [alerts, setAlerts] = useState<{ symbol: string; targetPrice: number; condition: 'above' | 'below'; triggered: boolean }[]>([]);
-  const [alertInput, setAlertInput] = useState({ symbol: '', price: '' });
-  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const {
+    balance, positions, pendingOrders,
+    orderType, setOrderType,
+    limitPrice, setLimitPrice,
+    stopLossPrice, setStopLossPrice,
+    useLots, setUseLots,
+    tradeQty, setTradeQty,
+    alerts, alertInput, setAlertInput,
+    executeTrade, addAlert, cancelOrder, removeAlert, handleTickerUpdate: handlePaperTickerUpdate,
+  } = usePaperTrading();
   const [isInitializing, setIsInitializing] = useState(false);
   const [macroData, setMacroData] = useState({ usdInr: 0, bondYield: 0, vix: 14 });
   const [orderFlow, setOrderFlow] = useState({ buyDelta: 0, sellDelta: 0, callIV: 0, putIV: 0 });
@@ -614,143 +317,33 @@ export default function App() {
     setWatchlist(prev => prev.filter(w => w.symbol !== symbol));
   }, []);
 
-  const { isConnected, isConnecting, lastUpdate } = useSSE({
-    onIndexUpdate: useCallback((data: IndexData[]) => {
-      setIndices(data);
-      setLoading(false);
-    }, []),
-    onBreadthUpdate: useCallback((data: MarketBreadth) => {
-      setBreadth(data);
-    }, []),
-    onTickerUpdate: useCallback((data: StockQuote) => {
-      setWatchlist(prev => prev.map(w =>
-        w.symbol === data.symbol
-          ? { ...w, ltp: data.ltp, change: data.change, percentChange: data.percentChange, volume: data.volume, timestamp: Date.now() }
-          : w
-      ));
-      setPositions(prev => prev.map(p =>
-        p.symbol === data.symbol ? { ...p, currentPrice: data.ltp } : p
-      ));
-
-      // Check and execute pending orders
-      setPendingOrders(prevOrders => {
-        const executed: PaperTradeOrder[] = [];
-        const remaining: PaperTradeOrder[] = [];
-
-        for (const order of prevOrders) {
-          if (order.status !== "pending") {
-            remaining.push(order);
-            continue;
-          }
-
-          // Check if order should be triggered
-          let shouldTrigger = false;
-          if (order.orderType === "stop-loss" && order.triggerPrice) {
-            // Stop-loss: sell when price falls below trigger
-            if (order.type === "sell" && data.ltp <= order.triggerPrice) shouldTrigger = true;
-            // Stop-loss: buy when price rises above trigger (for short positions)
-            if (order.type === "buy" && data.ltp >= order.triggerPrice) shouldTrigger = true;
-          }
-          if (order.orderType === "target" && order.price) {
-            // Target: sell when price rises above target
-            if (order.type === "sell" && data.ltp >= order.price) shouldTrigger = true;
-            // Target: buy when price falls below target
-            if (order.type === "buy" && data.ltp <= order.price) shouldTrigger = true;
-          }
-
-          if (shouldTrigger) {
-            // Execute the order
-            const qty = order.quantity;
-            const price = data.ltp;
-            const value = qty * price;
-
-            if (order.type === "buy") {
-              setBalance(b => b - value);
-              setPositions(prev => {
-                const existing = prev.find(p => p.symbol === order.symbol);
-                if (existing) {
-                  const newAvg = ((existing.quantity * existing.avgPrice) + value) / (existing.quantity + qty);
-                  return prev.map(p => p.symbol === order.symbol ? { ...p, quantity: p.quantity + qty, avgPrice: newAvg } : p);
-                } else {
-                  return [...prev, { symbol: order.symbol, quantity: qty, avgPrice: price, currentPrice: price, lotSize: order.lotSize }];
-                }
-              });
-            } else {
-              setBalance(b => b + value);
-              setPositions(prev => {
-                const existing = prev.find(p => p.symbol === order.symbol);
-                if (existing && existing.quantity === qty) {
-                  return prev.filter(p => p.symbol !== order.symbol);
-                } else if (existing) {
-                  return prev.map(p => p.symbol === order.symbol ? { ...p, quantity: p.quantity - qty } : p);
-                }
-                return prev;
-              });
-            }
-
-            executed.push({ ...order, status: "executed", executedPrice: price, executedAt: Date.now() });
-
-            // Show notification
-            if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-              new Notification(`Order Executed: ${order.symbol}`, {
-                body: `${order.type.toUpperCase()} ${qty} @ ₹${price.toFixed(2)}`,
-              });
-            }
-          } else {
-            remaining.push(order);
-          }
-        }
-
-        return remaining;
-      });
-
-      // Check price alerts
-      setAlerts(prev => prev.map(alert => {
-        if (alert.triggered || alert.symbol !== data.symbol) return alert;
-        const hit = (alert.condition === 'above' && data.ltp >= alert.targetPrice) ||
-                    (alert.condition === 'below' && data.ltp <= alert.targetPrice);
-        if (hit) {
-          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-            new Notification(`🔔 ZENIT Alert: ${alert.symbol}`, {
-              body: `Price ${alert.condition === 'above' ? 'crossed above' : 'dropped below'} ₹${alert.targetPrice}. Current: ₹${data.ltp}`,
-            });
-          }
-          return { ...alert, triggered: true };
-        }
-        return alert;
-      }));
-    }, []),
-    onGainersUpdate: useCallback((data: GainerLoser[]) => {
-      setGainers(data);
-    }, []),
-    onLosersUpdate: useCallback((data: GainerLoser[]) => {
-      setLosers(data);
-    }, []),
-    onSectorsUpdate: useCallback((data: SectorData[]) => {
-      setSectors(data);
-    }, []),
-    onScreenerUpdate: useCallback((data: any[]) => {
-      setScreenerSignals(data);
-    }, []),
-  });
+  const handleTickerUpdate = useCallback((data: StockQuote) => {
+    setWatchlist(prev => prev.map(w =>
+      w.symbol === data.symbol
+        ? { ...w, ltp: data.ltp, change: data.change, percentChange: data.percentChange, volume: data.volume, timestamp: Date.now() }
+        : w
+    ));
+    handlePaperTickerUpdate(data);
+  }, [handlePaperTickerUpdate]);
+  tickerRef.current = handleTickerUpdate;
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setIsCopilotOpen(true); }
-      if (e.key === 'Escape') { setActiveOverlay(null); setIsCopilotOpen(false); setChartData([]); setExpandedSection(null); }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); overlay.push('copilot'); }
+      if (e.key === 'Escape') { overlay.closeAll(); setChartData([]); selectStock(null); }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
   useEffect(() => {
-    if (activeOverlay === 'options') {
+    if (overlay.isOpen('options')) {
       fetch('/api/options?symbol=NIFTY')
         .then(res => res.json())
         .then(data => setOptionsChain(data))
         .catch(() => setOptionsChain(null));
     }
-    if (activeOverlay === 'heatmap') {
+    if (overlay.isOpen('heatmap')) {
       const fetchHeatmap = () => {
         fetch(`/api/heatmap?view=${heatmapView}`)
           .then(res => res.json())
@@ -761,7 +354,7 @@ export default function App() {
       const heatmapRefresh = setInterval(fetchHeatmap, 60000);
       return () => clearInterval(heatmapRefresh);
     }
-  }, [activeOverlay, heatmapView]);
+  }, [overlay, heatmapView]);
 
 
 
@@ -882,7 +475,8 @@ export default function App() {
 
   const openStockDetail = useCallback(async (stock: WatchlistItem) => {
     setSelectedStock(stock);
-    setActiveOverlay('detail');
+    selectStock(stock.symbol);
+    overlay.push('detail');
     setStockInsight({ text: "", loading: true });
     setChartLoading(true);
     
@@ -927,99 +521,6 @@ export default function App() {
     setCopilotResponse({ text: res.text, loading: false, sources: res.sources || [] });
   }, [copilotQuery, indices, institutionalData, balance, sentiment, watchlist]);
 
-  const executeTrade = useCallback((action: 'BUY' | 'SELL') => {
-    if (!selectedStock) return;
-
-    // Determine quantity based on lot size or direct input
-    let qty: number;
-    if (useLots) {
-      const lots = parseInt(tradeQty);
-      if (isNaN(lots) || lots <= 0) return;
-      const lotSize = getLotSize(selectedStock.symbol);
-      qty = fromLots(lots, selectedStock.symbol);
-    } else {
-      qty = parseInt(tradeQty);
-      if (isNaN(qty) || qty <= 0) return;
-    }
-
-    const orderPrice = orderType === "limit" && limitPrice ? parseFloat(limitPrice) : selectedStock.ltp;
-    const value = qty * orderPrice;
-
-    // For market and limit orders, execute immediately
-    if (orderType === "market" || orderType === "limit") {
-      if (action === 'BUY' && balance < value) {
-        alert("Insufficient Capital!");
-        return;
-      }
-
-      setPositions(prev => {
-        const existing = prev.find(p => p.symbol === selectedStock.symbol);
-        let newPositions = [...prev];
-        if (action === 'BUY') {
-          setBalance(b => b - value);
-          if (existing) {
-            const newAvg = ((existing.quantity * existing.avgPrice) + value) / (existing.quantity + qty);
-            newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity + qty, avgPrice: newAvg, lotSize: getLotSize(selectedStock.symbol) } : p);
-          } else {
-            newPositions.push({ symbol: selectedStock.symbol, quantity: qty, avgPrice: orderPrice, currentPrice: selectedStock.ltp, lotSize: getLotSize(selectedStock.symbol) });
-          }
-        } else {
-          if (!existing || existing.quantity < qty) {
-            alert("Insufficient shares to sell!");
-            return prev;
-          }
-          setBalance(b => b + value);
-          if (existing.quantity === qty) {
-            newPositions = newPositions.filter(p => p.symbol !== selectedStock.symbol);
-          } else {
-            newPositions = newPositions.map(p => p.symbol === selectedStock.symbol ? { ...p, quantity: p.quantity - qty } : p);
-          }
-        }
-        return newPositions;
-      });
-    }
-
-    // For stop-loss and target orders, add to pending orders
-    if ((orderType === "stop-loss" || orderType === "target") && stopLossPrice) {
-      const triggerPrice = parseFloat(stopLossPrice);
-      if (isNaN(triggerPrice) || triggerPrice <= 0) return;
-
-      const newOrder: PaperTradeOrder = {
-        id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        symbol: selectedStock.symbol,
-        type: action === 'BUY' ? 'buy' : 'sell',
-        orderType: orderType,
-        quantity: qty,
-        price: orderType === "target" ? triggerPrice : undefined,
-        triggerPrice: triggerPrice,
-        status: "pending",
-        lotSize: getLotSize(selectedStock.symbol),
-      };
-
-      setPendingOrders(prev => [...prev, newOrder]);
-      alert(`${orderType === "stop-loss" ? "Stop-loss" : "Target"} order placed at ₹${triggerPrice}`);
-    }
-  }, [selectedStock, tradeQty, balance, orderType, limitPrice, stopLossPrice, useLots]);
-
-  const addAlert = useCallback(() => {
-    if (!alertInput.symbol || !alertInput.price) return;
-    const price = parseFloat(alertInput.price);
-    if (isNaN(price) || price <= 0) return;
-    // Request notification permission
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-    const existing = positions.find(p => p.symbol === alertInput.symbol.toUpperCase()) || 
-                     watchlist.find(w => w.symbol === alertInput.symbol.toUpperCase());
-    const currentPrice = existing ? (existing as any).ltp ?? (existing as any).currentPrice : 0;
-    setAlerts(prev => [...prev, {
-      symbol: alertInput.symbol.toUpperCase(),
-      targetPrice: price,
-      condition: price >= currentPrice ? 'above' : 'below',
-      triggered: false,
-    }]);
-    setAlertInput({ symbol: '', price: '' });
-  }, [alertInput, positions, watchlist]);
 
   const totalAdvances = breadth?.advances || 0;
   const totalDeclines = breadth?.declines || 0;
@@ -1040,8 +541,8 @@ export default function App() {
           transition={{ duration: 1, ease: [0.22, 1, 0.36, 1] }}
           className="fixed inset-0 bg-zinc-950 text-zinc-300 select-none overflow-hidden font-sans flex flex-col h-screen"
         >
-          <div className="flex-none px-2 lg:px-4 pt-2 lg:pt-3">
-            <header className="flex items-center justify-between border-b border-white/5 pb-2">
+          <div className="flex-none px-2 lg:px-4">
+            <header className="flex items-center justify-between border-b border-white/5 py-1">
           <div className="flex items-center gap-6 overflow-x-auto no-scrollbar pr-4">
              <div className="flex items-center gap-2 group cursor-pointer shrink-0 ml-4">
                <img src="/icons/logo.png" alt="ZENIT Logo" className="w-7 h-7 object-contain group-hover:scale-110 transition-transform" />
@@ -1064,11 +565,17 @@ export default function App() {
             <div className="flex items-center gap-0.5 bg-zinc-900/60 rounded-lg border border-white/5 p-0.5">
               {DESKTOP_VIEWS.map(view => {
                 const Icon = view.icon;
-                const isActive = activeView === view.id;
+                const isActive = view.id === "overview" ? activeDock === null : activeDock === view.id;
                 return (
                   <button
                     key={view.id}
-                    onClick={() => setActiveView(view.id)}
+                    onClick={() => {
+                      if (view.id === "overview") {
+                        setActiveDock(null);
+                      } else {
+                        setActiveDock(prev => prev === view.id ? null : view.id);
+                      }
+                    }}
                     className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[9px] font-bold uppercase tracking-wider transition-all ${
                       isActive
                         ? 'bg-amber-500/15 text-amber-500 border border-amber-500/20'
@@ -1094,7 +601,7 @@ export default function App() {
               </span>
             )}
             <button 
-              onClick={() => setIsCopilotOpen(true)} 
+              onClick={() => overlay.push('copilot')} 
               className="p-2 hover:bg-white/5 rounded-md text-zinc-500 hover:text-amber-500 transition-colors"
               title="Cmd+K Copilot"
             >
@@ -1104,125 +611,24 @@ export default function App() {
         </header>
       </div>
 
+      <div className="hidden lg:block px-4 shrink-0">
+        <PinnedStrip />
+      </div>
+
       <main className="flex-1 w-full px-2 pb-2 lg:px-4 lg:pb-4 flex flex-col lg:grid lg:grid-cols-12 lg:auto-rows-fr gap-2 lg:gap-3 overflow-y-auto lg:overflow-hidden pt-1 lg:pt-2 mb-16 lg:mb-0">
 
-      {/* ── Desktop: view-specific content ── */}
-      {activeView !== "overview" && (<>
-          {activeView === "fo" && (
-            <>
-              <section className="lg:col-span-8 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <OptionsChain />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <OIWall />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <SentimentGauge />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="VIX" icon={Gauge} />
-                <VIXCard />
-              </section>
-              <section className="lg:col-span-4 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="Order Flow" icon={Activity} />
-                <FlowCard />
-              </section>
-            </>
-          )}
-          {activeView === "institutional" && (
-            <>
-              <section className="lg:col-span-6 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="FII / DII Activity" icon={Building2} />
-                <InstitutionalCard />
-              </section>
-              <section className="lg:col-span-6 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="Sector Flows" icon={PieChart} />
-                <SectorFlowsCard />
-              </section>
-              <section className="lg:col-span-12 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="FII/DII History" icon={LineChart} />
-                <InstitutionalHistoryCard />
-              </section>
-            </>
-          )}
-          {activeView === "earnings" && (
-            <>
-              <section className="lg:col-span-7 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <EarningsContent />
-              </section>
-              <section className="lg:col-span-5 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <CorporateActionsContent />
-              </section>
-            </>
-          )}
-          {activeView === "macro" && (
-            <>
-              <section className="lg:col-span-6 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <EconomicCalendarContent />
-              </section>
-              <section className="lg:col-span-3 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="FX Rates" icon={Globe} />
-                <FXRatesCard />
-              </section>
-              <section className="lg:col-span-3 lg:row-span-6 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="RBI Rates" icon={Landmark} />
-                <RBIRatesCard />
-              </section>
-              <section className="lg:col-span-12 lg:row-span-5 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden lg:flex">
-                <WidgetHeader title="Macro Indicators" icon={BarChart3} />
-                <MacroIndicatorsCard />
-              </section>
-            </>
-          )}
-      </>)}
+      {/* Mobile quick jump bar */}
+      <div className="lg:hidden">
+        <QuickJumpBar />
+      </div>
 
-      {/* ── Mobile: view-specific content ── */}
-      {activeView === "fo" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><OptionsChain /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><SentimentGauge /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><OIWall /></div>
-        </div>
-      )}
-      {activeView === "institutional" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="FII / DII Activity" icon={Building2} />
-            <InstitutionalCard />
-          </div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="Sector Flows" icon={PieChart} />
-            <SectorFlowsCard />
-          </div>
-        </div>
-      )}
-      {activeView === "earnings" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><EarningsContent /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><CorporateActionsContent /></div>
-        </div>
-      )}
-      {activeView === "macro" && (
-        <div className="lg:hidden flex flex-col gap-2 flex-1 overflow-y-auto">
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><EconomicCalendarContent /></div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="FX Rates" icon={Globe} />
-            <FXRatesCard />
-          </div>
-          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
-            <WidgetHeader title="RBI Rates" icon={Landmark} />
-            <RBIRatesCard />
-          </div>
-        </div>
-      )}
-
-      {/* ── Overview view (desktop + mobile) ── */}
-      {activeView === "overview" && (<>
-        <section className={`lg:col-span-3 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col overflow-hidden ${mobileTab === 'watchlist' ? 'flex min-h-[500px]' : 'hidden lg:flex'}`}>
+      {/* ── Overview view (always rendered) ── */}
+      {(<>
+        <section className="lg:col-span-3 lg:row-span-11 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col overflow-hidden min-h-[400px] lg:min-h-0">
 <WidgetHeader 
               title="Terminal Monitor" 
               icon={Activity} 
-              onExpand={() => setExpandedSection('Watchlist')}
+              onExpand={() => overlay.push('expanded', { section: 'Watchlist' })}
               extra={
                 <button
                   onClick={exportWatchlist}
@@ -1331,7 +737,7 @@ export default function App() {
                  <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-black flex items-center gap-1"><Wallet size={12}/> Paper Portfolio</span>
                  <div className="flex items-center gap-2">
                    <Mono className="text-sm font-bold text-emerald-400">₹{balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Mono>
-                   <button onClick={() => setExpandedSection('Portfolio')} className="text-zinc-700 hover:text-amber-500 transition-colors" title="Expand"><Maximize2 size={10} /></button>
+                   <button onClick={() => overlay.push('expanded', { section: 'Portfolio' })} className="text-zinc-700 hover:text-amber-500 transition-colors" title="Expand"><Maximize2 size={10} /></button>
                  </div>
                </div>
                <div className="space-y-2 max-h-[150px] overflow-y-auto no-scrollbar">
@@ -1377,7 +783,7 @@ export default function App() {
                          <div className="flex items-center gap-2">
                            <span className="text-[10px] text-amber-500 font-mono">₹{order.triggerPrice?.toFixed(2)}</span>
                            <button
-                             onClick={() => setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: "cancelled" } : o))}
+                             onClick={() => cancelOrder(order.id)}
                              className="text-zinc-600 hover:text-rose-400 transition-colors"
                            >
                              <X size={10} />
@@ -1391,7 +797,7 @@ export default function App() {
            </div>
         </section>
 
-        <section className={`lg:col-span-9 lg:row-span-4 gap-3 ${mobileTab === 'indices' ? 'flex flex-col lg:flex-row' : 'hidden lg:flex lg:flex-row'}`}>
+        <section className="lg:col-span-9 lg:row-span-4 gap-3 flex flex-col lg:flex-row">
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center justify-between w-full">
@@ -1400,7 +806,7 @@ export default function App() {
                   <span className="text-[9px] font-black text-amber-500 uppercase tracking-widest">Market Heatmap</span>
                 </div>
                 <button 
-                  onClick={() => setActiveOverlay('heatmap')}
+                  onClick={() => overlay.push('heatmap')}
                   className="text-[8px] text-zinc-500 hover:text-amber-500 uppercase font-bold"
                 >
                   Open →
@@ -1420,7 +826,7 @@ export default function App() {
                     key={s.symbol || i} 
                     className="rounded border border-white/5 flex flex-col justify-center items-center hover:scale-105 transition-transform cursor-pointer"
                     style={{ background: bg }}
-                    onClick={() => setActiveOverlay('heatmap')}
+                    onClick={() => overlay.push('heatmap')}
                   >
                     <span className="text-[8px] font-black text-zinc-300 truncate">{s.name}</span>
                     <Mono className={`text-[10px] font-bold ${isPos ? 'text-emerald-400' : 'text-rose-500'}`}>
@@ -1433,7 +839,7 @@ export default function App() {
           </div>
           
           <div className="col-span-3 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col justify-between">
-            <WidgetHeader title="Breadth Gauge" icon={BarChart3} onExpand={() => setExpandedSection('Breadth Gauge')} />
+            <WidgetHeader title="Breadth Gauge" icon={BarChart3} onExpand={() => overlay.push('expanded', { section: 'Breadth Gauge' })} />
             {loading ? (
               <div className="flex-1 flex flex-col justify-center gap-4 px-2">
                 <div className="flex justify-between">
@@ -1469,7 +875,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className={`lg:col-span-4 lg:row-span-4 gap-2 ${mobileTab === 'scanner' ? 'flex flex-col min-h-[400px] lg:min-h-0' : 'hidden lg:flex'}`}>
+        <section className={`gap-2 ${selectedStockSymbol ? 'lg:col-span-6 lg:row-span-5' : 'lg:col-span-4 lg:row-span-4'} flex flex-col min-h-[300px] lg:min-h-0`}>
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -1514,7 +920,7 @@ export default function App() {
                   <Loader2 className="animate-spin text-zinc-600" size={24} />
                 </div>
               ) : chartData.length > 0 ? (
-                <RealCandlestickChart data={chartData} height={200} />
+                <RealCandlestickChart data={chartData} height={selectedStockSymbol ? 300 : 200} />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-zinc-500 text-[10px] italic">
                   Select a stock to generate chart
@@ -1524,8 +930,8 @@ export default function App() {
           </div>
         </section>
 
-        <section className={`lg:col-span-5 lg:row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex-col ${mobileTab === 'news' ? 'flex min-h-[500px]' : 'hidden lg:flex'}`}>
-           <WidgetHeader title="Intelligence Hub" icon={Globe} onExpand={() => setExpandedSection('Intelligence Hub')} />
+        <section className="lg:col-span-5 lg:row-span-7 bg-zinc-900/20 border border-white/5 rounded-xl p-3 flex flex-col min-h-[400px] lg:min-h-0">
+           <WidgetHeader title="Intelligence Hub" icon={Globe} onExpand={() => overlay.push('expanded', { section: 'Intelligence Hub' })} />
            <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pr-1">
               <div className="p-3 bg-zinc-950/40 border border-white/5 rounded-lg flex flex-col gap-2">
                  <div className="flex justify-between items-center">
@@ -1607,7 +1013,12 @@ export default function App() {
                     onChange={e => setAlertInput(prev => ({ ...prev, price: e.target.value }))}
                     className="flex-1 bg-zinc-900 border border-white/10 rounded px-2 py-1 text-[9px] text-white outline-none focus:border-amber-500/50"
                   />
-                  <button onClick={addAlert} className="px-2 bg-amber-500/20 text-amber-500 border border-amber-500/30 rounded text-[9px] font-black hover:bg-amber-500/30 transition-all">
+                  <button onClick={() => {
+                    const sym = alertInput.symbol.toUpperCase();
+                    const existing = positions.find(p => p.symbol === sym) || watchlist.find(w => w.symbol === sym);
+                    const currentPrice = existing ? (existing as any).ltp ?? (existing as any).currentPrice ?? 0 : 0;
+                    addAlert(currentPrice);
+                  }} className="px-2 bg-amber-500/20 text-amber-500 border border-amber-500/30 rounded text-[9px] font-black hover:bg-amber-500/30 transition-all">
                     +
                   </button>
                 </div>
@@ -1617,7 +1028,7 @@ export default function App() {
                       <span className="font-black text-zinc-300">{a.symbol}</span>
                       <span className="text-zinc-500">{a.condition === 'above' ? '↑' : '↓'} ₹{a.targetPrice}</span>
                       <span className={a.triggered ? 'text-zinc-600' : 'text-amber-500'}>{a.triggered ? 'TRIGGERED' : 'WATCHING'}</span>
-                      <button onClick={() => setAlerts(prev => prev.filter((_, j) => j !== i))} className="text-zinc-700 hover:text-rose-500 ml-1">✕</button>
+                      <button onClick={() => removeAlert(i)} className="text-zinc-700 hover:text-rose-500 ml-1">✕</button>
                     </div>
                   ))}
                   {alerts.length === 0 && <p className="text-[8px] text-zinc-700 italic">No alerts set.</p>}
@@ -1642,14 +1053,14 @@ export default function App() {
                 ))}
               </div>
            </div>
-           <button onClick={() => setIsCopilotOpen(true)} className="mt-auto w-full py-2 bg-zinc-900/50 border border-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-white hover:border-white/30 transition-all flex items-center justify-center gap-2">
+           <button onClick={() => overlay.push('copilot')} className="mt-auto w-full py-2 bg-zinc-900/50 border border-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest text-zinc-500 hover:text-white hover:border-white/30 transition-all flex items-center justify-center gap-2">
              Analyze Today ✨
            </button>
         </section>
 
-        <section className={`lg:col-span-4 lg:row-span-3 gap-2 ${mobileTab === 'indices' || mobileTab === 'scanner' ? 'flex flex-col lg:flex-row' : 'hidden lg:flex lg:flex-row'}`}>
+        <section className="lg:col-span-4 lg:row-span-3 gap-2 flex flex-col lg:flex-row">
           <div className="flex-1 bg-zinc-900/20 border border-white/5 rounded-xl p-2 overflow-hidden flex flex-col">
-             <WidgetHeader title="Top Movers" icon={Target} extra={<select className="bg-zinc-950 text-[8px] text-zinc-500 border border-white/10 rounded px-1"><option>Gainers</option></select>} onExpand={() => setExpandedSection('Top Movers')} />
+             <WidgetHeader title="Top Movers" icon={Target} extra={<select className="bg-zinc-950 text-[8px] text-zinc-500 border border-white/10 rounded px-1"><option>Gainers</option></select>} onExpand={() => overlay.push('expanded', { section: 'Top Movers' })} />
              <div className="space-y-1.5 mt-1 overflow-y-auto no-scrollbar">
                 {gainers && gainers.length > 0 ? gainers.slice(0, 5).map((item: any, i: number) => (
                   <div key={item.symbol + i} className="flex items-center justify-between p-1.5 bg-zinc-950/50 rounded border border-white/5 hover:border-amber-500/30 cursor-pointer">
@@ -1673,7 +1084,7 @@ export default function App() {
              <div className="flex-1 flex flex-col items-center justify-center">
                <Mono className="text-3xl font-black text-emerald-400">{optionsChain?.pcr || '1.2'}</Mono>
                <span className="text-[8px] text-zinc-600 mt-1">Max Pain: {optionsChain?.maxPain || '22.4K'}</span>
-               <button onClick={() => setActiveOverlay('options')} className="text-[8px] text-zinc-500 hover:text-amber-500 mt-2">Details →</button>
+               <button onClick={() => overlay.push('options')} className="text-[8px] text-zinc-500 hover:text-amber-500 mt-2">Details →</button>
              </div>
           </div>
         </section>
@@ -1683,11 +1094,11 @@ export default function App() {
 
       {/* ── Expanded Section Overlay ── */}
       <AnimatePresence>
-        {expandedSection && (
+        {overlay.isOpen('expanded') && (
           <>
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setExpandedSection(null)}
+              onClick={() => overlay.pop()}
               className="fixed inset-0 bg-black/80 backdrop-blur-xl z-[150]"
             />
             <motion.div
@@ -1698,11 +1109,11 @@ export default function App() {
               <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0 bg-zinc-900/50">
                 <div className="flex items-center gap-3">
                   <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                  <h2 className="text-base font-black text-white uppercase tracking-widest italic">{expandedSection}</h2>
+                  <h2 className="text-base font-black text-white uppercase tracking-widest italic">{overlay.getProps('expanded')?.section}</h2>
                   <span className="text-[9px] text-zinc-600 font-bold uppercase tracking-widest">Live Feed</span>
                 </div>
                 <button
-                  onClick={() => setExpandedSection(null)}
+                  onClick={() => overlay.pop()}
                   className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white border border-white/10 rounded-lg text-xs font-black uppercase tracking-widest transition-all"
                 >
                   <Minimize2 size={12} /> Close
@@ -1711,7 +1122,7 @@ export default function App() {
 
               <div className="flex-1 overflow-auto p-6 no-scrollbar">
 
-                {expandedSection === 'Watchlist' && (
+                {overlay.getProps('expanded')?.section === 'Watchlist' && (
                   <div className="h-full flex flex-col gap-4 max-w-2xl mx-auto">
                     <div className="relative">
                       <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" />
@@ -1720,7 +1131,7 @@ export default function App() {
                     </div>
                     <div className="flex-1 space-y-2 overflow-y-auto no-scrollbar">
                       {watchlist.map((stock) => (
-                        <div key={stock.symbol} onClick={() => { openStockDetail(stock); setExpandedSection(null); }}
+                        <div key={stock.symbol} onClick={() => { openStockDetail(stock); overlay.pop(); }}
                           className="flex items-center justify-between p-4 rounded-xl bg-zinc-900/50 hover:bg-white/5 cursor-pointer border border-white/5 hover:border-amber-500/30 transition-all group">
                           <div>
                             <div className="text-lg font-black text-white group-hover:text-amber-400 transition-colors">{stock.symbol}</div>
@@ -1737,7 +1148,7 @@ export default function App() {
                   </div>
                 )}
 
-{expandedSection === 'Intelligence Hub' && (
+{overlay.getProps('expanded')?.section === 'Intelligence Hub' && (
                   <div className="h-full max-w-6xl mx-auto flex flex-col gap-4">
                     <div className="grid grid-cols-6 gap-2">
                       <div className="p-2 bg-zinc-900/60 border border-white/5 rounded-xl">
@@ -1972,7 +1383,7 @@ export default function App() {
                   </div>
                 )}
 
-                {expandedSection === 'Top Movers' && (
+                {overlay.getProps('expanded')?.section === 'Top Movers' && (
                   <div className="max-w-4xl mx-auto">
                     <div className="grid grid-cols-2 gap-6">
                       {[{ label: 'Top Gainers', data: gainers, color: 'emerald' }, { label: 'Top Losers', data: losers, color: 'rose' }].map(group => (
@@ -1980,7 +1391,7 @@ export default function App() {
                           <h3 className={`text-sm font-black uppercase tracking-widest mb-4 text-${group.color}-400`}>{group.label}</h3>
                           <div className="space-y-2">
                             {(group.data.length > 0 ? group.data : []).map((item: any, i: number) => (
-                              <div key={item.symbol + i} onClick={() => { openStockDetail({ symbol: item.symbol, name: item.symbol, ltp: item.ltp, change: 0, percentChange: item.percentChange, volume: item.volume, timestamp: Date.now() }); setExpandedSection(null); }}
+                              <div key={item.symbol + i} onClick={() => { openStockDetail({ symbol: item.symbol, name: item.symbol, ltp: item.ltp, change: 0, percentChange: item.percentChange, volume: item.volume, timestamp: Date.now() }); overlay.pop(); }}
                                 className="flex items-center justify-between p-4 bg-zinc-900/50 rounded-xl border border-white/5 hover:border-amber-500/30 cursor-pointer transition-all">
                                 <div>
                                   <span className="font-black text-white">{item.symbol}</span>
@@ -1996,7 +1407,7 @@ export default function App() {
                   </div>
                 )}
 
-                {expandedSection === 'Breadth Gauge' && (
+                {overlay.getProps('expanded')?.section === 'Breadth Gauge' && (
                   <div className="max-w-2xl mx-auto flex flex-col gap-8 mt-8">
                     <div className="flex justify-between items-center">
                       <div className="text-center">
@@ -2025,7 +1436,7 @@ export default function App() {
                   </div>
                 )}
 
-                {expandedSection === 'Portfolio' && (
+                {overlay.getProps('expanded')?.section === 'Portfolio' && (
                   <div className="max-w-3xl mx-auto flex flex-col gap-6">
                     <div className="flex justify-between items-center p-6 bg-zinc-900/60 border border-white/10 rounded-2xl">
                       <div>
@@ -2043,7 +1454,7 @@ export default function App() {
                         const pnl = (p.currentPrice - p.avgPrice) * p.quantity;
                         const pnlPct = (pnl / (p.avgPrice * p.quantity)) * 100;
                         return (
-                          <div key={p.symbol} onClick={() => { openStockDetail({ symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0 }); setExpandedSection(null); }}
+                          <div key={p.symbol} onClick={() => { openStockDetail({ symbol: p.symbol, name: p.symbol, ltp: p.currentPrice, change: 0, percentChange: 0, timestamp: 0, volume: 0 }); overlay.pop(); }}
                             className="flex items-center justify-between p-5 bg-zinc-900/50 rounded-xl border border-white/5 hover:border-amber-500/30 cursor-pointer transition-all">
                             <div>
                               <div className="text-lg font-black text-white">{p.symbol}</div>
@@ -2067,18 +1478,69 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* ── Dock Panels ── */}
+      <DockPanel open={activeDock === "fo"} onClose={() => setActiveDock(null)} title="F&O Intelligence" icon={BarChart3}>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 bg-zinc-900/20 border border-white/5 rounded-xl p-3"><OptionsChain /></div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><SentimentGauge /></div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><OIWall /></div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="VIX" icon={Gauge} /><VIXCard />
+          </div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="Order Flow" icon={Activity} /><FlowCard />
+          </div>
+        </div>
+      </DockPanel>
+
+      <DockPanel open={activeDock === "institutional"} onClose={() => setActiveDock(null)} title="Institutional Flows" icon={Building2}>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="FII / DII Activity" icon={Building2} /><InstitutionalCard />
+          </div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="Sector Flows" icon={PieChart} /><SectorFlowsCard />
+          </div>
+          <div className="col-span-2 bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="FII/DII History" icon={LineChart} /><InstitutionalHistoryCard />
+          </div>
+        </div>
+      </DockPanel>
+
+      <DockPanel open={activeDock === "earnings"} onClose={() => setActiveDock(null)} title="Earnings & Corporate Actions" icon={Calendar}>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><EarningsContent /></div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3"><CorporateActionsContent /></div>
+        </div>
+      </DockPanel>
+
+      <DockPanel open={activeDock === "macro"} onClose={() => setActiveDock(null)} title="Macro Economics" icon={Globe}>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 bg-zinc-900/20 border border-white/5 rounded-xl p-3"><EconomicCalendarContent /></div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="FX Rates" icon={Globe} /><FXRatesCard />
+          </div>
+          <div className="bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="RBI Rates" icon={Landmark} /><RBIRatesCard />
+          </div>
+          <div className="col-span-2 bg-zinc-900/20 border border-white/5 rounded-xl p-3">
+            <WidgetHeader title="Macro Indicators" icon={BarChart3} /><MacroIndicatorsCard />
+          </div>
+        </div>
+      </DockPanel>
+
       <MobileNav
-        activeTab={mobileTab}
-        activeView={activeView as MobileView}
-        onTabChange={setMobileTab}
-        onViewChange={(v) => setActiveView(v as DesktopView)}
-        onOpenCopilot={() => setIsCopilotOpen(true)}
+        activeTab={"indices" as MobileTab}
+        activeView={(activeDock || "overview") as MobileView}
+        onTabChange={() => {}}
+        onViewChange={(v) => setActiveDock(v === "overview" ? null : v as DesktopView)}
+        onOpenCopilot={() => overlay.push('copilot')}
       />
 
       <AnimatePresence>
-        {activeOverlay === 'detail' && selectedStock && (
+        {overlay.isOpen('detail') && selectedStock && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setActiveOverlay(null)} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => overlay.pop()} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
             <motion.div 
               initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
@@ -2092,7 +1554,7 @@ export default function App() {
                     <span className="text-[10px] text-zinc-600 font-bold uppercase tracking-[0.2em]">NSE Real-time Feed</span>
                   </div>
                 </div>
-                <button onClick={() => { setActiveOverlay(null); setChartData([]); }} className="p-2 hover:bg-white/5 rounded-full transition-all text-zinc-500 hover:text-white"><X size={28} /></button>
+                <button onClick={() => { overlay.pop(); setChartData([]); selectStock(null); }} className="p-2 hover:bg-white/5 rounded-full transition-all text-zinc-500 hover:text-white"><X size={28} /></button>
               </div>
 
               <div className="space-y-10">
@@ -2236,10 +1698,10 @@ export default function App() {
 
                      {/* Buy/Sell Buttons */}
                      <div className="flex gap-4">
-                       <button onClick={() => executeTrade('BUY')} className="flex-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
+                       <button onClick={() => selectedStock && executeTrade('BUY', selectedStock)} className="flex-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
                          {orderType === "market" ? "Buy Market" : orderType === "limit" ? "Buy Limit" : orderType === "stop-loss" ? "Buy SL" : "Buy Target"}
                        </button>
-                       <button onClick={() => executeTrade('SELL')} className="flex-1 bg-rose-500/20 text-rose-400 border border-rose-500/50 hover:bg-rose-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
+                       <button onClick={() => selectedStock && executeTrade('SELL', selectedStock)} className="flex-1 bg-rose-500/20 text-rose-400 border border-rose-500/50 hover:bg-rose-500/30 p-4 rounded-xl font-black uppercase tracking-widest transition-all">
                          {orderType === "market" ? "Sell Market" : orderType === "limit" ? "Sell Limit" : orderType === "stop-loss" ? "Sell SL" : "Sell Target"}
                        </button>
                      </div>
@@ -2253,9 +1715,9 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {activeOverlay === 'options' && (
+        {overlay.isOpen('options') && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setActiveOverlay(null)} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => overlay.pop()} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
             <motion.div 
               initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
@@ -2272,7 +1734,7 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <button onClick={() => setActiveOverlay(null)} className="p-2 hover:bg-white/5 rounded-full transition-all">
+                <button onClick={() => overlay.pop()} className="p-2 hover:bg-white/5 rounded-full transition-all">
                   <X size={32} className="text-zinc-600 hover:text-white" />
                 </button>
               </div>
@@ -2350,9 +1812,9 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {activeOverlay === 'heatmap' && (
+        {overlay.isOpen('heatmap') && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setActiveOverlay(null)} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => overlay.pop()} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50" />
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
               className="fixed inset-4 lg:inset-12 bg-zinc-900 border border-white/10 rounded-2xl z-[60] flex flex-col overflow-hidden"
@@ -2385,7 +1847,7 @@ export default function App() {
                     <option value="banknifty">Bank Nifty</option>
                     <option value="sensex">Sensex</option>
                   </select>
-                  <button onClick={() => setActiveOverlay(null)} className="p-2 hover:bg-white/5 rounded-full transition-all">
+                  <button onClick={() => overlay.pop()} className="p-2 hover:bg-white/5 rounded-full transition-all">
                     <X size={24} className="text-zinc-400 hover:text-white" />
                   </button>
                 </div>
@@ -2422,7 +1884,7 @@ export default function App() {
                   </div>
                 ) : (
                   <StockHeatmap data={heatmapData} onStockClick={(sym: string) => {
-                    setActiveOverlay(null);
+                    overlay.pop();
                     const stock = watchlist.find(w => w.symbol === sym);
                     if (stock) openStockDetail(stock);
                   }} />
@@ -2434,9 +1896,9 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {isCopilotOpen && (
+        {overlay.isOpen('copilot') && (
           <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[10vh] px-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCopilotOpen(false)} className="absolute inset-0 bg-black/90 backdrop-blur-2xl" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => overlay.pop()} className="absolute inset-0 bg-black/90 backdrop-blur-2xl" />
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
               className="relative w-full max-w-3xl bg-zinc-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
@@ -2540,5 +2002,19 @@ export default function App() {
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+export default function App() {
+  const tickerRef = React.useRef<((data: StockQuote) => void) | null>(null);
+
+  return (
+    <MarketProvider onTickerUpdate={(data) => tickerRef.current?.(data)}>
+      <OverlayProvider>
+        <GridProvider>
+          <AppContent tickerRef={tickerRef} />
+        </GridProvider>
+      </OverlayProvider>
+    </MarketProvider>
   );
 }
