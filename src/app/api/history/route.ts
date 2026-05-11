@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { fetchChart, extractCandles, normalizeChartQuote } from "@/lib/yahoo";
+import { fetchChart, fetchQuote, extractCandles, normalizeChartQuote } from "@/lib/yahoo";
 
-const STOCK_API = "http://65.0.104.9";
 const CACHE = new Map<string, { data: unknown; expiry: number }>();
 
 const VALID_RANGES = ["5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"];
@@ -15,29 +14,34 @@ async function fetchCurrentPrice(symbol: string): Promise<{ price: number; isDel
   }
 
   try {
-    const res = await fetch(`${STOCK_API}/stock?symbol=${symbol}.NS&res=num`, {
-      signal: AbortSignal.timeout(6000),
-      cache: "no-store",
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.status === "success" && data.data) {
-        const lastPrice = data.data.last_price;
-        const prevClose = data.data.previous_close || 0;
-        const isLive = typeof lastPrice === 'number' && lastPrice !== null && !isNaN(lastPrice);
-        const price = isLive ? lastPrice : prevClose;
-        CACHE.set(cacheKey, { data: { price, isDelayed: !isLive }, expiry: Date.now() + 60000 });
-        return { price, isDelayed: !isLive };
+    const quote = await fetchQuote(symbol, { timeoutMs: 6000, cacheTtlMs: 60000 });
+    if (quote) {
+      const price = quote.regularMarketPrice || 0;
+      if (price > 0) {
+        CACHE.set(cacheKey, { data: { price, isDelayed: false }, expiry: Date.now() + 60000 });
+        return { price, isDelayed: false };
       }
     }
   } catch {}
   return null;
 }
 
+function daysToRange(days: number): string {
+  if (days <= 7) return "5d";
+  if (days <= 30) return "1mo";
+  if (days <= 90) return "3mo";
+  if (days <= 180) return "6mo";
+  if (days <= 365) return "1y";
+  if (days <= 730) return "2y";
+  if (days <= 1825) return "5y";
+  return "max";
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get("symbol")?.toUpperCase().replace(".NS", "");
-  const range = searchParams.get("range") || "3mo";
+  const days = searchParams.get("days");
+  const range = searchParams.get("range") || (days ? daysToRange(parseInt(days)) : "3mo");
   const interval = searchParams.get("interval") || "1d";
 
   if (!symbol) {

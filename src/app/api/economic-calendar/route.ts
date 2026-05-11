@@ -218,9 +218,9 @@ async function fetchEarningsEvents(days: number): Promise<CalendarEvent[]> {
 }
 
 // Fetch upcoming corporate actions (dividends, splits) from NSE
-async function fetchCorporateEvents(days: number): Promise<CalendarEvent[]> {
+async function fetchCorporateEvents(days: number, origin: string): Promise<CalendarEvent[]> {
   try {
-    const res = await fetch(`http://localhost:3000/api/corporate-actions?days=${days}`, {
+    const res = await fetch(`${origin}/api/corporate-actions?days=${days}`, {
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return [];
@@ -239,7 +239,7 @@ async function fetchCorporateEvents(days: number): Promise<CalendarEvent[]> {
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
+  const { searchParams, origin } = new URL(request.url);
   const days = parseInt(searchParams.get("days") || "60");
   const category = searchParams.get("category") || "all";
 
@@ -247,7 +247,7 @@ export async function GET(request: Request) {
     const [staticEvents, earnings, corporateEvents] = await Promise.all([
       Promise.resolve(getUpcomingEvents(days)),
       fetchEarningsEvents(days),
-      fetchCorporateEvents(days),
+      fetchCorporateEvents(days, origin),
     ]);
 
     const events = [...staticEvents, ...earnings, ...corporateEvents];

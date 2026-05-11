@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
+import { fetchChartBatch, normalizeChartQuote } from '@/lib/yahoo';
 
-const BASE_URL = 'http://65.0.104.9';
 const NIFTY50_SYMBOLS = [
   "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","BHARTIARTL",
   "LT","ITC","KOTAKBANK","HINDUNILVR","MARUTI","SUNPHARMA","TITAN",
@@ -9,14 +9,24 @@ const NIFTY50_SYMBOLS = [
 
 export async function GET() {
   try {
-    const symList = NIFTY50_SYMBOLS.map(s => s.includes('&') ? s.replace('&', '%26') : s).join(",");
-    const res = await fetch(`${BASE_URL}/stock/list?symbols=${symList}&res=num`);
-    if (res.ok) {
-      const data = await res.json();
-      return NextResponse.json(data);
-    }
-    throw new Error('API failed');
-  } catch (e) {
+    const chartMap = await fetchChartBatch(NIFTY50_SYMBOLS, { batchSize: 10, batchDelayMs: 100, timeoutMs: 5000 });
+    const stocks: Record<string, unknown>[] = [];
+
+    chartMap.forEach((chart, symbol) => {
+      const q = normalizeChartQuote(chart);
+      stocks.push({
+        symbol,
+        last_price: q.price,
+        change: q.change,
+        percent_change: q.percentChange,
+        volume: q.volume,
+        previous_close: q.previousClose,
+        company_name: q.shortName || symbol,
+      });
+    });
+
+    return NextResponse.json({ stocks });
+  } catch {
     return NextResponse.json({ error: true }, { status: 503 });
   }
 }

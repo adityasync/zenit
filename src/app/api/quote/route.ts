@@ -1,48 +1,61 @@
 import { NextResponse } from 'next/server';
+import { fetchQuote, fetchChart, normalizeChartQuote } from '@/lib/yahoo';
 
 export const dynamic = 'force-dynamic';
-
-const BASE_URL = 'http://65.0.104.9';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const symbol = searchParams.get('symbol') || 'RELIANCE';
-  
+
   try {
-    const res = await fetch(`${BASE_URL}/stock?symbol=${symbol}.NS&res=num`, {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) throw new Error('API error');
-    const data = await res.json();
-    
-    if (data.status === 'success' && data.data) {
-      const d = data.data;
-      const lastPrice = d.last_price;
-      const prevClose = d.previous_close || 0;
-      const isLive = typeof lastPrice === 'number' && lastPrice !== null && !isNaN(lastPrice);
-      
+    // Try v7 quote API first (richer data: PE, market cap, 52w range)
+    const quote = await fetchQuote(symbol, { timeoutMs: 6000, cacheTtlMs: 60000 });
+
+    if (quote) {
       return NextResponse.json({
-        symbol: data.symbol,
-        ltp: isLive ? lastPrice : prevClose,
-        change: isLive ? d.change : 0,
-        percentChange: isLive ? d.percent_change : 0,
-        open: isLive ? d.open : prevClose,
-        high: isLive ? d.day_high : prevClose,
-        low: isLive ? d.day_low : prevClose,
-        close: prevClose,
-        volume: d.volume,
-        marketCap: d.market_cap,
-        pe: d.pe_ratio,
-        sector: d.sector,
-        companyName: d.company_name,
+        symbol: quote.symbol || symbol,
+        ltp: quote.regularMarketPrice || 0,
+        change: quote.regularMarketChange || 0,
+        percentChange: quote.regularMarketChangePercent || 0,
+        open: quote.regularMarketOpen || 0,
+        high: quote.regularMarketDayHigh || 0,
+        low: quote.regularMarketDayLow || 0,
+        close: quote.regularMarketPrice || 0,
+        volume: quote.regularMarketVolume || 0,
+        marketCap: quote.marketCap || 0,
+        pe: quote.trailingPE || 0,
+        sector: '',
+        companyName: quote.shortName || quote.longName || symbol,
         timestamp: Date.now(),
-        isDelayed: !isLive,
+        isDelayed: false,
       });
     }
-    
-    return NextResponse.json(data);
-  } catch (e) {
+
+    // Fallback to chart API
+    const chart = await fetchChart(symbol, { range: '1d', interval: '1d', timeoutMs: 6000, cacheTtlMs: 60000 });
+    if (chart) {
+      const q = normalizeChartQuote(chart);
+      return NextResponse.json({
+        symbol: symbol,
+        ltp: q.price,
+        change: q.change,
+        percentChange: q.percentChange,
+        open: q.price - q.change,
+        high: 0,
+        low: 0,
+        close: q.previousClose,
+        volume: q.volume,
+        marketCap: 0,
+        pe: 0,
+        sector: '',
+        companyName: q.shortName || symbol,
+        timestamp: Date.now(),
+        isDelayed: false,
+      });
+    }
+
+    return NextResponse.json({ error: 'Failed to fetch data' }, { status: 500 });
+  } catch {
     return NextResponse.json({ error: 'Failed to fetch data' }, { status: 500 });
   }
 }

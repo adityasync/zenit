@@ -7,11 +7,14 @@ export const runtime = "nodejs";
 
 function isMarketOpen(): boolean {
   const now = new Date();
-  const istHours = now.getUTCHours() + 5;
-  const istMinutes = now.getUTCMinutes() + 30;
-  const hour = istMinutes >= 60 ? istHours + 1 : istHours;
-  const minute = istMinutes >= 60 ? istMinutes - 60 : istMinutes;
+  // Convert to IST (UTC+5:30)
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const istMinutes = (utcMinutes + 330) % 1440; // 330 = 5h30m in minutes
+  const hour = Math.floor(istMinutes / 60);
+  const minute = istMinutes % 60;
   const day = now.getUTCDay();
+  // IST can shift the day; if IST is before ~5:30 AM and UTC is late evening, it's next day in IST
+  // But for market hours (9:15-15:30 IST) this doesn't matter
   if (day === 0 || day === 6) return false;
   const totalMinutes = hour * 60 + minute;
   return totalMinutes >= 555 && totalMinutes <= 930;
@@ -66,27 +69,27 @@ interface GainerLoser {
 const INDEX_CONSTITUENTS: Record<string, { symbols: string[]; baseValue: number }> = {
   "NIFTY 50": {
     symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "LT", "ITC", "KOTAKBANK"],
-    baseValue: 22850,
+    baseValue: 24500,
   },
   "NIFTY BANK": {
     symbols: ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSIND"],
-    baseValue: 48500,
+    baseValue: 52000,
   },
   "SENSEX": {
     symbols: ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "LT", "ITC"],
-    baseValue: 75500,
+    baseValue: 81000,
   },
   "NIFTY IT": {
     symbols: ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
-    baseValue: 41500,
+    baseValue: 38000,
   },
   "NIFTY AUTO": {
     symbols: ["MARUTI", "TATAMOTORS", "BAJFINANCE"],
-    baseValue: 24500,
+    baseValue: 26000,
   },
   "NIFTY PHARMA": {
     symbols: ["SUNPHARMA", "DRREDDY", "CIPLA", "LUPIN", "APOLLOHOSP"],
-    baseValue: 23850,
+    baseValue: 22000,
   },
 };
 

@@ -261,8 +261,12 @@ export function normalizeChartQuote(result: YahooChartResult): NormalizedQuote {
   const change = price - prevClose;
   const percentChange = prevClose > 0 ? (change / prevClose) * 100 : 0;
 
+  // meta.symbol contains the Yahoo symbol (e.g. "RELIANCE.NS"); strip suffix for the ticker
+  const rawSymbol = (meta as Record<string, unknown>).symbol as string | undefined;
+  const symbol = rawSymbol ? rawSymbol.replace(/\.NS$|\.BO$/, "") : "";
+
   return {
-    symbol: meta.shortName || "",
+    symbol: symbol || meta.shortName || "",
     price,
     change,
     percentChange,
