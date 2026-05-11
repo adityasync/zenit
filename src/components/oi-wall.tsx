@@ -99,8 +99,8 @@ export function OIWall({ symbol = "NIFTY" }: OIWallProps) {
           </div>
         </div>
 
-        <div ref={containerRef} className="relative h-48">
-          <div className="absolute inset-0 flex">
+        <div ref={containerRef} className="relative h-48 overflow-y-auto">
+          <div className="flex min-h-full">
             <div className="flex-1 flex flex-col justify-end pr-2">
               <div className="space-y-1">
                 {data.ceOI.map((oi, i) => {
@@ -163,7 +163,6 @@ export function OIWall({ symbol = "NIFTY" }: OIWallProps) {
             </div>
           </div>
 
-          <div className="absolute top-0 left-1/2 transform -translate-x-1/2 border-l border-dashed border-primary/50 h-full pointer-events-none" />
         </div>
 
         <div className="mt-4 pt-4 border-t flex justify-center">
