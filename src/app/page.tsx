@@ -1430,34 +1430,99 @@ function AppContent({ tickerRef }: { tickerRef: React.MutableRefObject<((data: S
                   </div>
                 )}
 
-                {overlay.getProps('expanded')?.section === 'Breadth Gauge' && (
-                  <div className="max-w-2xl mx-auto flex flex-col gap-8 mt-8">
-                    <div className="flex justify-between items-center">
-                      <div className="text-center">
-                        <div className="text-5xl font-black text-emerald-400 tabular-nums">{(breadth?.advances || totalAdvances).toLocaleString()}</div>
-                        <div className="text-xs font-black text-emerald-500 uppercase tracking-widest mt-2">Advances</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-4xl font-black text-zinc-500 tabular-nums">{(breadth?.unchanged || 42).toLocaleString()}</div>
-                        <div className="text-xs font-black text-zinc-600 uppercase tracking-widest mt-2">Unchanged</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-5xl font-black text-rose-400 tabular-nums">{(breadth?.declines || totalDeclines).toLocaleString()}</div>
-                        <div className="text-xs font-black text-rose-500 uppercase tracking-widest mt-2">Declines</div>
-                      </div>
-                    </div>
-                    <div className="h-6 w-full bg-zinc-800 rounded-full overflow-hidden flex border border-white/5">
-                      <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${advancePercent}%` }} />
-                      <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: `${100 - advancePercent}%` }} />
-                    </div>
-                    <div className="text-center">
-                      <span className={`text-4xl font-black italic ${advancePercent > 60 ? 'text-emerald-400' : advancePercent < 40 ? 'text-rose-400' : 'text-zinc-400'}`}>
-                        {advancePercent > 60 ? 'Bullish Market' : advancePercent < 40 ? 'Bearish Market' : 'Neutral Market'}
-                      </span>
-                      <div className="text-sm text-zinc-500 mt-2">{advancePercent.toFixed(1)}% stocks advancing today</div>
-                    </div>
-                  </div>
-                )}
+{overlay.getProps('expanded')?.section === 'Breadth Gauge' && (
+                   <div className="max-w-3xl mx-auto flex flex-col gap-6 mt-8">
+                     {/* ── Core Counts ── */}
+                     <div className="flex justify-between items-center">
+                       <div className="text-center">
+                         <div className="text-5xl font-black text-emerald-400 tabular-nums">{(breadth?.advances || totalAdvances).toLocaleString()}</div>
+                         <div className="text-xs font-black text-emerald-500 uppercase tracking-widest mt-2">Advances</div>
+                       </div>
+                       <div className="text-center">
+                         <div className="text-4xl font-black text-zinc-500 tabular-nums">{(breadth?.unchanged || 42).toLocaleString()}</div>
+                         <div className="text-xs font-black text-zinc-600 uppercase tracking-widest mt-2">Unchanged</div>
+                       </div>
+                       <div className="text-center">
+                         <div className="text-5xl font-black text-rose-400 tabular-nums">{(breadth?.declines || totalDeclines).toLocaleString()}</div>
+                         <div className="text-xs font-black text-rose-500 uppercase tracking-widest mt-2">Declines</div>
+                       </div>
+                     </div>
+
+                     {/* ── A/D Ratio & Breadth Momentum ── */}
+                     <div className="grid grid-cols-3 gap-3">
+                       <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl text-center">
+                         <div className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">A/D Ratio</div>
+                         <Mono className={`text-2xl font-black ${advancePercent > 50 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                           {totalAdvances > 0 && totalDeclines > 0 ? (totalAdvances / totalDeclines).toFixed(2) : '--'}
+                         </Mono>
+                       </div>
+                       <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl text-center">
+                         <div className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Breadth Momentum</div>
+                         <Mono className={`text-2xl font-black ${(totalAdvances - totalDeclines) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                           {(totalAdvances - totalDeclines) >= 0 ? '+' : ''}{(totalAdvances - totalDeclines).toLocaleString()}
+                         </Mono>
+                       </div>
+                       <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl text-center">
+                         <div className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-1">Total Traded</div>
+                         <Mono className="text-2xl font-black text-white">
+                           {(totalAdvances + totalDeclines + (breadth?.unchanged || 0)).toLocaleString()}
+                         </Mono>
+                       </div>
+                     </div>
+
+                     {/* ── Breadth Bar ── */}
+                     <div className="h-6 w-full bg-zinc-800 rounded-full overflow-hidden flex border border-white/5">
+                       <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${advancePercent}%` }} />
+                       <div className="h-full bg-rose-500 transition-all duration-500" style={{ width: `${100 - advancePercent}%` }} />
+                     </div>
+
+                     {/* ── Verdict ── */}
+                     <div className="text-center">
+                       <span className={`text-4xl font-black italic ${advancePercent > 60 ? 'text-emerald-400' : advancePercent < 40 ? 'text-rose-400' : 'text-zinc-400'}`}>
+                         {advancePercent > 60 ? 'Bullish Market' : advancePercent < 40 ? 'Bearish Market' : 'Neutral Market'}
+                       </span>
+                       <div className="text-sm text-zinc-500 mt-2">{advancePercent.toFixed(1)}% stocks advancing today</div>
+                     </div>
+
+                     {/* ── Sector Breadth Breakdown ── */}
+                     {sectors && sectors.length > 0 && (
+                       <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl">
+                         <div className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                           <PieChart size={10} className="text-amber-500" /> Sector Breadth
+                         </div>
+                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                           {sectors.map((sector) => (
+                             <div key={sector.symbol} className="p-2 bg-zinc-950 rounded-lg border border-white/5">
+                               <div className="text-[9px] font-black text-zinc-500 uppercase">{sector.name.replace('NIFTY ', '')}</div>
+                               <div className={`text-sm font-bold mt-0.5 ${sector.percentChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                 {sector.percentChange >= 0 ? '+' : ''}{sector.percentChange.toFixed(1)}%
+                               </div>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     )}
+
+                     {/* ── Index Breadth ── */}
+                     {indices && indices.length > 0 && (
+                       <div className="p-3 bg-zinc-900/40 border border-white/5 rounded-xl">
+                         <div className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                           <TrendingUp size={10} className="text-amber-500" /> Index Breadth
+                         </div>
+                         <div className="flex flex-wrap gap-2">
+                           {indices.map((idx) => (
+                             <div key={idx.symbol} className="flex items-center gap-1.5 px-2 py-1 bg-zinc-950 rounded border border-white/5">
+                               <span className="text-[8px] font-black text-zinc-500">{idx.name}</span>
+                               <span className={`text-[9px] font-bold ${idx.percentChange >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                 {idx.percentChange >= 0 ? '+' : ''}{idx.percentChange.toFixed(2)}%
+                               </span>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     )}
+                   </div>
+                 )}
 
                 {overlay.getProps('expanded')?.section === 'Portfolio' && (
                   <div className="max-w-3xl mx-auto flex flex-col gap-6">
