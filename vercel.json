@@ -7,7 +7,7 @@
   "crons": [
     {
       "path": "/api/cron/news",
-      "schedule": "*/2 * * * *"
+      "schedule": "0 0 * * *"
     }
   ],
   "headers": [
@@ -31,7 +31,7 @@
   ],
   "functions": {
     "src/app/api/stream/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 10
     }
   }
 }

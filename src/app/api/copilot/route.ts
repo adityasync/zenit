@@ -72,7 +72,7 @@ OUTPUT FORMAT: Plain conversational text only.`;
     console.log(`[COPILOT] Query: "${query.substring(0, 40)}..."`);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
 
     try {
       const response = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {

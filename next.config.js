@@ -3,10 +3,6 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
-  i18n: {
-    locales: ["en"],
-    defaultLocale: "en",
-  },
   images: {
     remotePatterns: [
       {
